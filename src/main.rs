@@ -1,6 +1,9 @@
 use anyhow;
+#[macro_use]
+extern crate lazy_static;
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Read, Write, Error, ErrorKind, Result, BufRead, BufReader};
+use std::io::{Read, BufReader};
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
@@ -19,7 +22,223 @@ enum Arch {
     AttAsm,
 }
 
+lazy_static! {
+    static ref SYMLINKAGE: HashMap<char, &'static str> = {
+        let mut m = HashMap::new();
+
+        m.insert('*', "star");
+        m.insert('/', "slash");
+        m.insert('\\', "backslash");
+        m.insert('!', "store");
+        m.insert('@', "fetch");
+        m.insert('#', "pound");
+        m.insert('\'', "tick");
+        m.insert('`', "backtick");
+        m.insert('"', "quote");
+        m.insert('+', "plus");
+        m.insert('-', "minus");
+        m.insert(',', "comma");
+        m.insert('.', "dot");
+        m.insert('<', "less");
+        m.insert('>', "greater");
+        m.insert('=', "equals");
+        m.insert('(', "open_paren");
+        m.insert(')', "close_paren");
+        m.insert('[', "open_square");
+        m.insert(']', "close_square");
+        m.insert('{', "open_brace");
+        m.insert('}', "close_brace");
+        m.insert('?', "question");
+        m.insert('%', "percent");
+        m.insert('^', "caret");
+        m.insert('&', "ampersand");
+        m.insert('~', "tilde");
+        m.insert('|', "pipe");
+
+        m
+    };
+
+    static ref ACTIVE_WORDS: HashMap<&'static str, FthAction> = {
+        let mut m = HashMap::new();
+        m.insert(":", w_colon as FthAction);
+        m.insert(";", w_semicolon as FthAction);
+        m.insert("CODE", w_code as FthAction);
+        m.insert("(", w_paren as FthAction);
+        m.insert("CONSTANT", w_constant as FthAction);
+        m.insert("VARIABLE", w_variable as FthAction);
+        m.insert("BEGIN", w_begin as FthAction);
+        m.insert("WHILE", w_while as FthAction);
+        m.insert("REPEAT", w_repeat as FthAction);
+        m.insert("IF", w_if as FthAction);
+        m.insert("THEN", w_then as FthAction);
+        m.insert("DO", w_do as FthAction);
+        m.insert("LOOP", w_loop as FthAction);
+        m.insert("UNTIL", w_until as FthAction);
+        m.insert("ELSE", w_else as FthAction);
+        m.insert("IMMEDIATE", w_immediate as FthAction);
+        m.insert("CASE", w_case as FthAction);
+        m.insert("OF", w_of as FthAction);
+        m.insert("ENDOF", w_endof as FthAction);
+        m.insert("ENDCASE", w_endcase as FthAction);
+        m.insert("2VARIABLE", w_2variable as FthAction);
+        m.insert("S\"", w_s_quote as FthAction);
+        m.insert("ABORT\"", w_abort_quote as FthAction);
+        m.insert("[']", w_bracket_tick as FthAction);
+        m
+    };
+}
+
+type FthAction = fn(&mut Fth) -> anyhow::Result<()>;
+
+fn w_colon(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_semicolon(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_code(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_paren(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_constant(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_variable(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_begin(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_while(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_repeat(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_if(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_then(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_do(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn  w_loop(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_hcode(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_until(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_else(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_immediate(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_case(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_of(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_endof(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_endcase(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_2variable(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_s_quote(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_abort_quote(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn w_bracket_tick(fth: &mut Fth) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn word_to_symbol(word_string: &str) -> String {
+    let mut result = String::new();
+    let mut needs_underscore = false;
+
+    for c in word_string.chars() {
+        match SYMLINKAGE.get(&c) {
+            None => {
+                if needs_underscore {
+                    result.push('_');
+                    needs_underscore = false;
+                }
+                result.push(c);
+            }
+            Some(map_value) => {
+                if result.len() > 0 {
+                    result.push('_');
+                }
+                result.push_str(map_value);
+                needs_underscore = true;
+            }
+        }
+    }
+    result
+}
+
 struct Fth {
+    input_mgr: InputMgr,
+}
+
+impl Fth {
+    pub fn new() -> Fth {
+        Fth {
+            input_mgr: InputMgr::new(),
+        }
+    }
+
+    pub fn interpret(&mut self, in_file: &str) -> anyhow::Result<()> {
+        self.input_mgr.open_file(in_file)?;
+
+        loop {
+            self.input_mgr.skip_ws()?;
+            let w = self.input_mgr.word()?;
+            match w {
+                None => break,
+                Some(w) => println!("@@@ {w}"),
+            }
+        }
+        Ok(())
+    }
 }
 
 struct InputMgr {
@@ -122,17 +341,8 @@ impl InputMgr {
 
 fn main() -> anyhow::Result<()> {
     let cli = Args::parse();
-    let mut im = InputMgr::new();
-    im.open_file(&cli.filename)?;
-
-    loop {
-        im.skip_ws()?;
-        let w = im.word()?;
-        match w {
-            None => break,
-            Some(w) => println!("@@@ {w}"),
-        }
-    }
+    let mut fth = Fth::new();
+    fth.interpret(&cli.filename)?;
 
     Ok(())
 }
