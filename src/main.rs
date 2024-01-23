@@ -60,12 +60,14 @@ lazy_static! {
 
     static ref ACTIVE_WORDS: HashMap<&'static str, FthAction> = {
         let mut m = HashMap::new();
+
         m.insert(":", w_colon as FthAction);
         m.insert(";", w_semicolon as FthAction);
         m.insert("CODE", w_code as FthAction);
         m.insert("(", w_paren as FthAction);
         m.insert("CONSTANT", w_constant as FthAction);
         m.insert("VARIABLE", w_variable as FthAction);
+        m.insert("2VARIABLE", w_2variable as FthAction);
         m.insert("BEGIN", w_begin as FthAction);
         m.insert("WHILE", w_while as FthAction);
         m.insert("REPEAT", w_repeat as FthAction);
@@ -80,10 +82,11 @@ lazy_static! {
         m.insert("OF", w_of as FthAction);
         m.insert("ENDOF", w_endof as FthAction);
         m.insert("ENDCASE", w_endcase as FthAction);
-        m.insert("2VARIABLE", w_2variable as FthAction);
         m.insert("S\"", w_s_quote as FthAction);
         m.insert("ABORT\"", w_abort_quote as FthAction);
         m.insert("[']", w_bracket_tick as FthAction);
+        m.insert("VERBATIM", w_verbatim as FthAction);
+
         m
     };
 }
@@ -142,7 +145,7 @@ fn  w_loop(fth: &mut Fth) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn w_hcode(fth: &mut Fth) -> anyhow::Result<()> {
+fn w_verbatim(fth: &mut Fth) -> anyhow::Result<()> {
     Ok(())
 }
 
@@ -197,7 +200,7 @@ fn word_to_symbol(word_string: &str) -> String {
     for c in word_string.chars() {
         match SYMLINKAGE.get(&c) {
             None => {
-                if needs_underscore {
+                if needs_underscore || (c != '_' && !c.is_ascii_alphabetic()) {
                     result.push('_');
                     needs_underscore = false;
                 }
@@ -217,12 +220,28 @@ fn word_to_symbol(word_string: &str) -> String {
 
 struct Fth {
     input_mgr: InputMgr,
+    is_compiling: bool,
+    data_stack: Vec<i64>,
 }
 
 impl Fth {
     pub fn new() -> Fth {
         Fth {
             input_mgr: InputMgr::new(),
+            is_compiling: false,
+            data_stack: Vec::new(),
+        }
+    }
+
+    fn do_literal(&mut self, n: i64) {
+        println!("@@@======== FIXME: do_literal '{n}'");
+    }
+
+    fn do_number(&mut self, n: i64) {
+        if self.is_compiling {
+            self.do_literal(n);
+        } else {
+            self.data_stack.push(n);
         }
     }
 
@@ -234,9 +253,39 @@ impl Fth {
             let w = self.input_mgr.word()?;
             match w {
                 None => break,
-                Some(w) => println!("@@@ {w}"),
+                Some(w) => {
+                    let upper_w = w.to_uppercase();
+                    match ACTIVE_WORDS.get(&*upper_w) {
+                        None => {
+                            if w.starts_with("0x") {
+                                let n = i64::from_str_radix(&w[2..], 16)?;
+                                self.do_number(n);
+                                continue;
+                            } else if w.starts_with("0b") {
+                                let n = i64::from_str_radix(&w[2..], 2)?;
+                                self.do_number(n);
+                                continue;
+                            }
+                            match i64::from_str_radix(&*w, 10) {
+                                Ok(n) => {
+                                    self.do_number(n);
+                                    continue;
+                                }
+                                Err(_) => {
+                                    println!("@@@ Inline {w} or fail if not compiling");
+                                    continue;
+                                }
+                            }
+                        }
+                        Some(action) => {
+                            // invoke the action
+                            println!("@@@ Would perform {w}");
+                        }
+                    }
+                }
             }
         }
+
         Ok(())
     }
 }
