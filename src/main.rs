@@ -3,7 +3,8 @@ use anyhow;
 extern crate lazy_static;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, BufReader};
+use std::mem;
+use std::io::{Read, BufReader, BufRead};
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
@@ -86,6 +87,7 @@ lazy_static! {
         m.insert("ABORT\"", w_abort_quote as FthAction);
         m.insert("[']", w_bracket_tick as FthAction);
         m.insert("VERBATIM", w_verbatim as FthAction);
+        m.insert("HEADLESSCODE", w_headless as FthAction);
 
         m
     };
@@ -94,14 +96,33 @@ lazy_static! {
 type FthAction = fn(&mut Fth) -> anyhow::Result<()>;
 
 fn w_colon(fth: &mut Fth) -> anyhow::Result<()> {
+    // FIXME: emit previous definition if one exists.
+    // Or not.  Maybe compile a list of word defns and
+    // then iterate over that after parsing.  That would
+    // all simple generation of separate sections if a
+    // target type requires it.  TBD.
+    fth.is_compiling = true;
+    fth.input_mgr.skip_ws()?;
+    let w_to_be_defined = fth.input_mgr.word()?;
+    println!("@@@ WORD {w_to_be_defined:?}");
+
     Ok(())
 }
 
 fn w_semicolon(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.is_compiling = false;
     Ok(())
 }
 
 fn w_code(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.input_mgr.skip_ws()?;
+    let w_to_be_defined = fth.input_mgr.word()?;
+    println!("@@@ CODE WORD: {w_to_be_defined:?}");
+    // FIXME: define a "word" with a name for the
+    // dictionary.  This is different than for
+    // "VERBATIM", as those instances are unnamed.
+    // FIXME: collect all lines until "END-CODE"
+    let code_lines = fth.input_mgr.lines_until("END-CODE");
     Ok(())
 }
 
@@ -146,6 +167,14 @@ fn  w_loop(fth: &mut Fth) -> anyhow::Result<()> {
 }
 
 fn w_verbatim(fth: &mut Fth) -> anyhow::Result<()> {
+    println!("@@@ VERBATIM");
+    let code_lines = fth.input_mgr.lines_until("END-VERBATIM");
+    Ok(())
+}
+
+fn w_headless(fth: &mut Fth) -> anyhow::Result<()> {
+    println!("@@@ HEADLESSCODE");
+    let code_lines = fth.input_mgr.lines_until("END-CODE");
     Ok(())
 }
 
@@ -245,6 +274,10 @@ impl Fth {
         }
     }
 
+    fn compile_word(&mut self, w: String) {
+        println!("@@@======== FIXME: compile_word '{w}'");
+    }
+
     pub fn interpret(&mut self, in_file: &str) -> anyhow::Result<()> {
         self.input_mgr.open_file(in_file)?;
 
@@ -260,26 +293,27 @@ impl Fth {
                             if w.starts_with("0x") {
                                 let n = i64::from_str_radix(&w[2..], 16)?;
                                 self.do_number(n);
-                                continue;
                             } else if w.starts_with("0b") {
                                 let n = i64::from_str_radix(&w[2..], 2)?;
                                 self.do_number(n);
-                                continue;
-                            }
-                            match i64::from_str_radix(&*w, 10) {
-                                Ok(n) => {
-                                    self.do_number(n);
-                                    continue;
-                                }
-                                Err(_) => {
-                                    println!("@@@ Inline {w} or fail if not compiling");
-                                    continue;
+                            } else {
+                                match i64::from_str_radix(&*w, 10) {
+                                    Ok(n) => {
+                                        self.do_number(n);
+                                    }
+                                    Err(_) => {
+                                        if self.is_compiling {
+                                            self.compile_word(w);
+                                        } else {
+                                            // FIXME
+                                            // println!("*** FIXME: handle bad immediate!")
+                                        }
+                                    }
                                 }
                             }
                         }
                         Some(action) => {
-                            // invoke the action
-                            println!("@@@ Would perform {w}");
+                            action(self)?;
                         }
                     }
                 }
@@ -292,14 +326,14 @@ impl Fth {
 
 struct InputMgr {
     input_readers: Vec<BufReader<File>>,
-    last_char: Option<u8>,
+    last_chars: String,
 }
 
 impl InputMgr {
     pub fn new() -> Self {
         InputMgr {
             input_readers: Vec::new(),
-            last_char: None,
+            last_chars: String::new(),
         }
     }
 
@@ -319,23 +353,55 @@ impl InputMgr {
         }
     }
 
-    fn next_char(&mut self) -> anyhow::Result<Option<u8>> {
-        match self.last_char.take() {
-            Some(c) => Ok(Some(c)),
-            None => {
-                'read_loop: loop {
-                    match self.input_readers.last_mut() {
-                        None => return Ok(None),
-                        Some(reader) => {
-                            let mut read_buf = [0; 1];
-                            let n_read = reader.read(&mut read_buf)?;
-                            if n_read == 0 {
-                                self.close_current()?;
-                                continue 'read_loop;
-                            } else {
-                                return Ok(Some(read_buf[0]))
-                            }
+    fn next_char(&mut self) -> anyhow::Result<Option<char>> {
+        let mut chars = self.last_chars.chars();
+        if let Some(r_char) = chars.next() {
+            self.last_chars = chars.as_str().to_string();
+            return Ok(Some(r_char));
+        }
+        'read_loop: loop {
+            match self.input_readers.last_mut() {
+                None => return Ok(None),
+                Some(reader) => {
+                    let mut read_buf = [0; 1];
+                    let n_read = reader.read(&mut read_buf)?;
+                    if n_read == 0 {
+                        self.close_current()?;
+                        continue 'read_loop;
+                    } else {
+                        return Ok(Some(char::from(read_buf[0])))
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn lines_until(&mut self, end_marker: &str) -> anyhow::Result<Vec<String>> {
+        let mut r_lines = Vec::new();
+
+        if self.last_chars.len() > 0 {
+            // FIXME: figure out how to use string.take()
+            let mut new_str = String::new();
+            mem::swap(&mut new_str, &mut self.last_chars);
+            r_lines.push(new_str);
+        }
+
+        'read_loop: loop {
+            match self.input_readers.last_mut() {
+                None => {
+                    return Ok(r_lines);
+                }
+                Some(reader) => {
+                    let mut read_buf = String::new();
+                    let n_read = reader.read_line(&mut read_buf)?;
+                    if n_read == 0 {
+                        self.close_current()?;
+                        continue 'read_loop;
+                    } else {
+                        if read_buf.starts_with(end_marker) {
+                            return Ok(r_lines);
                         }
+                        r_lines.push(read_buf);
                     }
                 }
             }
@@ -350,21 +416,20 @@ impl InputMgr {
                     if (c as char).is_whitespace() {
                         continue
                     }
-                    self.last_char = Some(c);
+                    self.last_chars = String::from(c);
                     return Ok(());
                 }
             };
         }
     }
 
-    pub fn str_by(&mut self, break_when: impl Fn(u8) -> bool) -> anyhow::Result<Option<String>> {
-        let mut buf = Vec::new();
+    pub fn str_by(&mut self, break_when: impl Fn(char) -> bool) -> anyhow::Result<Option<String>> {
+        let mut r_str = String::new();
 
         loop {
             match self.next_char()? {
                 None => {
-                    if buf.len() > 0 {
-                        let r_str = String::from_utf8(buf)?;
+                    if r_str.len() > 0 {
                         return Ok(Some(r_str));
                     } else {
                         return Ok(None);
@@ -374,17 +439,16 @@ impl InputMgr {
                     if break_when(c) {
                         // In this application (Forth), there is no need to
                         // "unread" the delimiter char.
-                        let r_str = String::from_utf8(buf)?;
                         return Ok(Some(r_str));
                     }
-                    buf.push(c);
+                    r_str.push(c);
                 }
             }
         }
     }
 
     pub fn word(&mut self) -> anyhow::Result<Option<String>> {
-        self.str_by(|c: u8| (c as char).is_whitespace())
+        self.str_by(|c: char| c.is_whitespace())
     }
 }
 
