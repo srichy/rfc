@@ -2,8 +2,6 @@ use anyhow;
 #[macro_use]
 extern crate lazy_static;
 use std::collections::HashMap;
-use std::fs::File;
-use std::mem;
 use clap::{Parser, ValueEnum};
 
 mod input_mgr;
@@ -42,8 +40,8 @@ lazy_static! {
         m.insert('-', "minus");
         m.insert(',', "comma");
         m.insert('.', "dot");
-        m.insert('<', "less");
-        m.insert('>', "greater");
+        m.insert('<', "from");
+        m.insert('>', "to");
         m.insert('=', "equals");
         m.insert('(', "open_paren");
         m.insert(')', "close_paren");
@@ -74,11 +72,12 @@ lazy_static! {
         m.insert("BEGIN", w_begin as FthAction);
         m.insert("WHILE", w_while as FthAction);
         m.insert("REPEAT", w_repeat as FthAction);
+        m.insert("UNTIL", w_until as FthAction);
+        m.insert("AGAIN", w_again as FthAction);
         m.insert("IF", w_if as FthAction);
         m.insert("THEN", w_then as FthAction);
         m.insert("DO", w_do as FthAction);
         m.insert("LOOP", w_loop as FthAction);
-        m.insert("UNTIL", w_until as FthAction);
         m.insert("ELSE", w_else as FthAction);
         m.insert("IMMEDIATE", w_immediate as FthAction);
         m.insert("CASE", w_case as FthAction);
@@ -90,6 +89,7 @@ lazy_static! {
         m.insert("[']", w_bracket_tick as FthAction);
         m.insert("VERBATIM", w_verbatim as FthAction);
         m.insert("HEADLESSCODE", w_headless as FthAction);
+        m.insert("NEXT-IMMEDIATE", w_next_immediate as FthAction);
 
         m
     };
@@ -98,73 +98,164 @@ lazy_static! {
 type FthAction = fn(&mut Fth) -> anyhow::Result<()>;
 
 fn w_colon(fth: &mut Fth) -> anyhow::Result<()> {
-    // FIXME: emit previous definition if one exists.
-    // Or not.  Maybe compile a list of word defns and
-    // then iterate over that after parsing.  That would
-    // all simple generation of separate sections if a
-    // target type requires it.  TBD.
     fth.is_compiling = true;
     fth.input_mgr.skip_ws()?;
     let w_to_be_defined = fth.input_mgr.word()?;
-    println!("@@@ WORD {w_to_be_defined:?}");
+    let w_to_be_defined = w_to_be_defined.expect("EOF after colon!");
+    let next_is_immediate = fth.next_is_immediate;
+    fth.next_is_immediate = false;
+    fth.create_word(&w_to_be_defined, next_is_immediate);
 
     Ok(())
 }
 
 fn w_semicolon(fth: &mut Fth) -> anyhow::Result<()> {
     fth.is_compiling = false;
+    fth.emit_word("exit");
+
     Ok(())
 }
 
 fn w_code(fth: &mut Fth) -> anyhow::Result<()> {
     fth.input_mgr.skip_ws()?;
     let w_to_be_defined = fth.input_mgr.word()?;
-    println!("@@@ CODE WORD: {w_to_be_defined:?}");
-    // FIXME: define a "word" with a name for the
-    // dictionary.  This is different than for
-    // "VERBATIM", as those instances are unnamed.
-    // FIXME: collect all lines until "END-CODE"
+    let w_to_be_defined = w_to_be_defined.expect("EOF while defining CODE");
+    let next_is_immediate = fth.next_is_immediate;
+    fth.next_is_immediate = false;
+    fth.create_code(&w_to_be_defined, next_is_immediate);
     let code_lines = fth.input_mgr.lines_until("END-CODE");
+    // FIXME: emit each code line, then close definition
+
     Ok(())
 }
 
 fn w_paren(fth: &mut Fth) -> anyhow::Result<()> {
+    let _ = fth.input_mgr.str_by(|c: char| c == ')')?;
+
     Ok(())
 }
 
 fn w_constant(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.input_mgr.skip_ws()?;
+    let constant_name = fth.input_mgr.word()?;
+    let constant_name = constant_name.expect("EOF while defining a CONSTANT");
+    match fth.data_stack.pop() {
+        None => panic!("Stack underflow for CONSTANT '{constant_name}"),
+        Some(v) => fth.create_constant(&constant_name, v),
+    }
+
     Ok(())
 }
 
 fn w_variable(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.input_mgr.skip_ws()?;
+    let variable_name = fth.input_mgr.word()?;
+    let variable_name = variable_name.expect("EOF while defining a VARIABLE");
+    fth.create_variable(&variable_name, 1);
+
+    Ok(())
+}
+
+fn w_2variable(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.input_mgr.skip_ws()?;
+    let variable_name = fth.input_mgr.word()?;
+    let variable_name = variable_name.expect("EOF while defining a 2VARIABLE");
+    fth.create_variable(&variable_name, 2);
+
     Ok(())
 }
 
 fn w_begin(fth: &mut Fth) -> anyhow::Result<()> {
+    let lab_begin = fth.new_label();
+    fth.emit_label(&lab_begin);
+    fth.ctrl_stack.push(lab_begin);
+
     Ok(())
 }
 
 fn w_while(fth: &mut Fth) -> anyhow::Result<()> {
+    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at WHILE");
+    let lab_end = fth.new_label();
+
+    fth.emit_word("qbranch");
+    fth.compute_label(&lab_end);
+
+    fth.ctrl_stack.push(lab_end);
+    fth.ctrl_stack.push(lab_begin);
+
     Ok(())
 }
 
 fn w_repeat(fth: &mut Fth) -> anyhow::Result<()> {
+    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at REPEAT");
+    let lab_end = fth.ctrl_stack.pop().expect("Missing WHILE label at REPEAT");
+
+    fth.emit_word("branch");
+    fth.compute_label(&lab_begin);
+    fth.emit_label(&lab_end);
+
+    Ok(())
+}
+
+fn w_until(fth: &mut Fth) -> anyhow::Result<()> {
+    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at REPEAT");
+
+    fth.emit_word("qbranch");
+    fth.compute_label(&lab_begin);
+
+    Ok(())
+}
+
+fn w_again(fth: &mut Fth) -> anyhow::Result<()> {
+    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at REPEAT");
+
+    fth.emit_word("branch");
+    fth.compute_label(&lab_begin);
+
     Ok(())
 }
 
 fn w_if(fth: &mut Fth) -> anyhow::Result<()> {
+    let label = fth.new_label();
+    fth.emit_word("qbranch");
+    fth.compute_label(&label);
+    fth.ctrl_stack.push(label);
+
+    Ok(())
+}
+
+fn w_else(fth: &mut Fth) -> anyhow::Result<()> {
+    let head_label = fth.ctrl_stack.pop().expect("Missing IF for ELSE");
+    let else_label = fth.new_label();
+    fth.emit_word("branch");
+    fth.compute_label(&else_label);
+    fth.ctrl_stack.push(else_label);
+    fth.emit_label(&head_label);
+
     Ok(())
 }
 
 fn w_then(fth: &mut Fth) -> anyhow::Result<()> {
+    let label = fth.ctrl_stack.pop().expect("Missing IF/ELSE for THEN");
+    fth.emit_label(&label);
+
     Ok(())
 }
 
 fn w_do(fth: &mut Fth) -> anyhow::Result<()> {
+    let label = fth.new_label();
+    fth.emit_word("_2_to_r");
+    fth.compute_label(&label);
+    fth.ctrl_stack.push(label);
+
     Ok(())
 }
 
 fn  w_loop(fth: &mut Fth) -> anyhow::Result<()> {
+    let label = fth.ctrl_stack.pop().expect("Missing DO for LOOP");
+    fth.emit_word("do_loop");
+    fth.compute_label(&label);
+
     Ok(())
 }
 
@@ -180,47 +271,107 @@ fn w_headless(fth: &mut Fth) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn w_until(fth: &mut Fth) -> anyhow::Result<()> {
-    Ok(())
-}
-
-fn w_else(fth: &mut Fth) -> anyhow::Result<()> {
-    Ok(())
-}
-
 fn w_immediate(fth: &mut Fth) -> anyhow::Result<()> {
+    panic!("FIXME: make a decision about word caching or not, please.");
     Ok(())
 }
 
 fn w_case(fth: &mut Fth) -> anyhow::Result<()> {
+    let label = fth.new_label();
+    fth.ctrl_stack.push(label);
+
     Ok(())
 }
 
 fn w_of(fth: &mut Fth) -> anyhow::Result<()> {
+    let lab_skip = fth.new_label();
+    fth.emit_word("over");
+    fth.emit_word("equals");
+    fth.emit_word("qbranch");
+    fth.compute_label(&lab_skip);
+    fth.emit_word("drop");
+
+    fth.ctrl_stack.push(lab_skip);
     Ok(())
 }
 
 fn w_endof(fth: &mut Fth) -> anyhow::Result<()> {
+    let lab_skip = fth.ctrl_stack.pop().expect("Missing OF for ENDOF");
+    let lab_end = fth.ctrl_stack.last().expect("Missing CASE for ENDOF");
+    let lab_end = lab_end.clone();
+
+    fth.emit_word("branch");
+    fth.compute_label(&lab_end);
+    fth.emit_label(&lab_skip);
+
     Ok(())
 }
 
 fn w_endcase(fth: &mut Fth) -> anyhow::Result<()> {
-    Ok(())
-}
+    let lab_end = fth.ctrl_stack.pop().expect("Missing ENDOF for ENDCASE");
+    fth.emit_word("drop");
+    fth.emit_label(&lab_end);
 
-fn w_2variable(fth: &mut Fth) -> anyhow::Result<()> {
     Ok(())
 }
 
 fn w_s_quote(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.input_mgr.skip_ws()?;
+    let term_str = fth.input_mgr.str_by(|c: char| c == '"')?;
+    let term_str = term_str.expect("Unterminated string for 's\"'");
+    let branch_target = fth.new_label();
+    let string_loc = fth.new_label();
+    fth.emit_word("branch");
+    fth.compute_label(&branch_target);
+    fth.emit_label(&string_loc);
+    fth.do_string_literal(&term_str);
+    fth.emit_label(&branch_target);
+    fth.emit_word("lit");
+    fth.compute_label(&string_loc);
+    fth.do_literal(term_str.len() as i64);
+
     Ok(())
 }
 
 fn w_abort_quote(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.input_mgr.skip_ws()?;
+    let term_str = fth.input_mgr.str_by(|c: char| c == '"')?;
+    let term_str = term_str.expect("Unterminated string for 's\"'");
+    let cont_target = fth.new_label();
+    let abort_target = fth.new_label();
+    let string_loc = fth.new_label();
+    fth.emit_word("qbranch");
+    fth.compute_label(&cont_target);
+    fth.emit_word("branch");
+    fth.compute_label(&abort_target);
+    fth.emit_label(&string_loc);
+    fth.do_string_literal(&term_str);
+    fth.emit_label(&abort_target);
+    fth.emit_word("lit");
+    fth.compute_label(&string_loc);
+    fth.do_literal(term_str.len() as i64);
+    fth.emit_word("type");
+    fth.emit_word("cr");
+    fth.emit_word("abort");
+    fth.emit_label(&cont_target);
+
     Ok(())
 }
 
 fn w_bracket_tick(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.input_mgr.skip_ws()?;
+    let w = fth.input_mgr.word()?;
+    let w = w.expect("EOF in '[']'");
+    let w = word_to_symbol(&w);
+    fth.emit_word("lit");
+    fth.emit_word(&w);
+
+    Ok(())
+}
+
+fn w_next_immediate(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.next_is_immediate = true;
+
     Ok(())
 }
 
@@ -254,6 +405,8 @@ struct Fth {
     is_compiling: bool,
     data_stack: Vec<i64>,
     ctrl_stack: Vec<String>,
+    next_label: u32,
+    next_is_immediate: bool,
 }
 
 impl Fth {
@@ -263,11 +416,24 @@ impl Fth {
             is_compiling: false,
             data_stack: Vec::new(),
             ctrl_stack: Vec::new(),
+            next_label: 1,
+            next_is_immediate: false,
         }
     }
 
+    fn new_label(&mut self) -> String {
+        let label_index = self.next_label;
+        let label_str = format!("L{label_index:08}");
+        self.next_label += 1;
+        label_str
+    }
+
     fn do_literal(&mut self, n: i64) {
-        println!("@@@======== FIXME: do_literal '{n}'");
+        // println!("@@@======== FIXME: do_literal '{n}'");
+    }
+
+    fn do_string_literal(&mut self, s: &str) {
+        // println!("@@@======== FIXME: do_literal '{n}'");
     }
 
     fn do_number(&mut self, n: i64) {
@@ -278,8 +444,32 @@ impl Fth {
         }
     }
 
-    fn compile_word(&mut self, w: String) {
-        println!("@@@======== FIXME: compile_word '{w}'");
+    fn create_word(&mut self, w: &str, is_immediate: bool) {
+        println!("@@@======== FIXME: create_word '{w}'");
+    }
+
+    fn create_code(&mut self, w: &str, is_immediate: bool) {
+        println!("@@@======== FIXME: create_code '{w}'");
+    }
+
+    fn emit_word(&mut self, w: &str) {
+        // println!("@@@======== FIXME: emit_word '{w}'");
+    }
+
+    fn compute_label(&mut self, w: &str) {
+        // println!("@@@======== FIXME: compute_label '{w}'");
+    }
+
+    fn emit_label(&mut self, l: &str) {
+        // println!("@@@======== FIXME: emit_label '{l}'");
+    }
+
+    fn create_constant(&mut self, name: &str, val: i64) {
+        println!("@@@======== FIXME: create_constant '{name}' = {val}");
+    }
+
+    fn create_variable(&mut self, name: &str, size: u8) {
+        println!("@@@======== FIXME: create_variable '{name}' x {size}");
     }
 
     pub fn interpret(&mut self, in_file: &str) -> anyhow::Result<()> {
@@ -307,7 +497,7 @@ impl Fth {
                                     }
                                     Err(_) => {
                                         if self.is_compiling {
-                                            self.compile_word(w);
+                                            self.emit_word(&w);
                                         } else {
                                             // FIXME
                                             // println!("*** FIXME: handle bad immediate: '{w}'");
