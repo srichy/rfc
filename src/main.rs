@@ -23,6 +23,8 @@ enum Arch {
     AttAsm,
 }
 
+type FthAction = fn(&mut Fth) -> anyhow::Result<()>;
+
 lazy_static! {
     static ref SYMLINKAGE: HashMap<char, &'static str> = {
         let mut m = HashMap::new();
@@ -95,8 +97,6 @@ lazy_static! {
     };
 }
 
-type FthAction = fn(&mut Fth) -> anyhow::Result<()>;
-
 fn w_colon(fth: &mut Fth) -> anyhow::Result<()> {
     fth.is_compiling = true;
     fth.input_mgr.skip_ws()?;
@@ -123,8 +123,8 @@ fn w_code(fth: &mut Fth) -> anyhow::Result<()> {
     let next_is_immediate = fth.next_is_immediate;
     fth.next_is_immediate = false;
     fth.create_code(&w_to_be_defined, next_is_immediate);
-    let code_lines = fth.input_mgr.lines_until("END-CODE");
-    // FIXME: emit each code line, then close definition
+    let code_lines = fth.input_mgr.lines_until("END-CODE")?;
+    fth.emit_lines(code_lines);
 
     Ok(())
 }
@@ -261,7 +261,9 @@ fn  w_loop(fth: &mut Fth) -> anyhow::Result<()> {
 
 fn w_verbatim(fth: &mut Fth) -> anyhow::Result<()> {
     println!("@@@ VERBATIM");
-    let code_lines = fth.input_mgr.lines_until("END-VERBATIM");
+    let code_lines = fth.input_mgr.lines_until("END-VERBATIM")?;
+    fth.emit_lines(code_lines);
+
     Ok(())
 }
 
@@ -273,7 +275,8 @@ fn w_headless(fth: &mut Fth) -> anyhow::Result<()> {
 
 fn w_immediate(fth: &mut Fth) -> anyhow::Result<()> {
     panic!("FIXME: make a decision about word caching or not, please.");
-    Ok(())
+
+    //Ok(())
 }
 
 fn w_case(fth: &mut Fth) -> anyhow::Result<()> {
@@ -400,7 +403,82 @@ fn word_to_symbol(word_string: &str) -> String {
     result
 }
 
+pub trait FthGen {
+    fn do_literal(&mut self, n: i64);
+    fn do_string_literal(&mut self, s: &str);
+    fn do_number(&mut self, n: i64);
+    fn create_word(&mut self, w: &str, is_immediate: bool);
+    fn create_code(&mut self, w: &str, is_immediate: bool);
+    fn close_definition(&mut self);
+    fn emit_word(&mut self, w: &str);
+    fn emit_lines(&mut self, lines: Vec<String>);
+    fn compute_label(&mut self, w: &str);
+    fn emit_label(&mut self, l: &str);
+    fn create_constant(&mut self, name: &str, val: i64);
+    fn create_variable(&mut self, name: &str, size: u8);
+}
+
+struct AttGen {
+    is_compiling: bool,
+}
+
+impl AttGen {
+    fn new() -> Self {
+        AttGen {
+            is_compiling: false,
+        }
+    }
+}
+
+impl FthGen for AttGen {
+    fn do_literal(&mut self, n: i64) {
+        // println!("@@@======== FIXME: do_literal '{n}'");
+    }
+
+    fn do_string_literal(&mut self, s: &str) {
+        // println!("@@@======== FIXME: do_literal '{n}'");
+    }
+
+    fn do_number(&mut self, n: i64) {
+    }
+
+    fn create_word(&mut self, w: &str, is_immediate: bool) {
+        println!("@@@======== FIXME: create_word '{w}'");
+    }
+
+    fn create_code(&mut self, w: &str, is_immediate: bool) {
+        println!("@@@======== FIXME: create_code '{w}'");
+    }
+
+    fn close_definition(&mut self) {
+    }
+
+    fn emit_word(&mut self, w: &str) {
+        // println!("@@@======== FIXME: emit_word '{w}'");
+    }
+
+    fn emit_lines(&mut self, lines: Vec<String>) {
+    }
+
+    fn compute_label(&mut self, w: &str) {
+        // println!("@@@======== FIXME: compute_label '{w}'");
+    }
+
+    fn emit_label(&mut self, l: &str) {
+        // println!("@@@======== FIXME: emit_label '{l}'");
+    }
+
+    fn create_constant(&mut self, name: &str, val: i64) {
+        println!("@@@======== FIXME: create_constant '{name}' = {val}");
+    }
+
+    fn create_variable(&mut self, name: &str, size: u8) {
+        println!("@@@======== FIXME: create_variable '{name}' x {size}");
+    }
+}
+
 struct Fth {
+    gen: Box<dyn FthGen>,
     input_mgr: InputMgr,
     is_compiling: bool,
     data_stack: Vec<i64>,
@@ -410,8 +488,13 @@ struct Fth {
 }
 
 impl Fth {
-    pub fn new() -> Fth {
+    pub fn new(arch: Arch) -> Fth {
+        let g = match arch {
+            Arch::C => panic!("C not supported yet"),
+            Arch::AttAsm => Box::new(AttGen::new()),
+        };
         Fth {
+            gen: g,
             input_mgr: InputMgr::new(),
             is_compiling: false,
             data_stack: Vec::new(),
@@ -429,47 +512,55 @@ impl Fth {
     }
 
     fn do_literal(&mut self, n: i64) {
-        // println!("@@@======== FIXME: do_literal '{n}'");
+        self.gen.do_literal(n);
     }
 
     fn do_string_literal(&mut self, s: &str) {
-        // println!("@@@======== FIXME: do_literal '{n}'");
+        self.gen.do_string_literal(s);
     }
 
     fn do_number(&mut self, n: i64) {
         if self.is_compiling {
-            self.do_literal(n);
+            self.gen.do_literal(n);
         } else {
             self.data_stack.push(n);
         }
     }
 
     fn create_word(&mut self, w: &str, is_immediate: bool) {
-        println!("@@@======== FIXME: create_word '{w}'");
+        self.gen.create_word(w, is_immediate);
     }
 
     fn create_code(&mut self, w: &str, is_immediate: bool) {
-        println!("@@@======== FIXME: create_code '{w}'");
+        self.gen.create_code(w, is_immediate);
+    }
+
+    fn close_definition(&mut self) {
+        self.gen.close_definition();
     }
 
     fn emit_word(&mut self, w: &str) {
-        // println!("@@@======== FIXME: emit_word '{w}'");
+        self.gen.emit_word(w);
     }
 
     fn compute_label(&mut self, w: &str) {
-        // println!("@@@======== FIXME: compute_label '{w}'");
+        self.gen.compute_label(w);
     }
 
     fn emit_label(&mut self, l: &str) {
-        // println!("@@@======== FIXME: emit_label '{l}'");
+        self.gen.emit_label(l);
     }
 
     fn create_constant(&mut self, name: &str, val: i64) {
-        println!("@@@======== FIXME: create_constant '{name}' = {val}");
+        self.gen.create_constant(name, val);
     }
 
     fn create_variable(&mut self, name: &str, size: u8) {
-        println!("@@@======== FIXME: create_variable '{name}' x {size}");
+        self.gen.create_variable(name, size);
+    }
+
+    fn emit_lines(&mut self, lines: Vec<String>) {
+        self.gen.emit_lines(lines);
     }
 
     pub fn interpret(&mut self, in_file: &str) -> anyhow::Result<()> {
@@ -520,7 +611,7 @@ impl Fth {
 
 fn main() -> anyhow::Result<()> {
     let cli = Args::parse();
-    let mut fth = Fth::new();
+    let mut fth = Fth::new(Arch::AttAsm);
     fth.interpret(&cli.filename)?;
 
     Ok(())
