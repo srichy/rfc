@@ -20,7 +20,8 @@ struct Args {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Arch {
     C,
-    AttAsm,
+    AttAsm32,
+    Ca6502,
 }
 
 type FthAction = fn(&mut Fth) -> anyhow::Result<()>;
@@ -29,6 +30,8 @@ lazy_static! {
     static ref SYMLINKAGE: HashMap<char, &'static str> = {
         let mut m = HashMap::new();
 
+        m.insert(':', "colon");
+        m.insert(';', "semicolon");
         m.insert('*', "star");
         m.insert('/', "slash");
         m.insert('\\', "backslash");
@@ -123,7 +126,8 @@ fn w_code(fth: &mut Fth) -> anyhow::Result<()> {
     let next_is_immediate = fth.next_is_immediate;
     fth.next_is_immediate = false;
     fth.create_code(&w_to_be_defined, next_is_immediate);
-    let code_lines = fth.input_mgr.lines_until("END-CODE")?;
+    let mut code_lines = fth.input_mgr.lines_until("END-CODE")?;
+    code_lines.push("    NEXT\n".to_string());
     fth.emit_lines(code_lines);
 
     Ok(())
@@ -260,7 +264,6 @@ fn  w_loop(fth: &mut Fth) -> anyhow::Result<()> {
 }
 
 fn w_verbatim(fth: &mut Fth) -> anyhow::Result<()> {
-    println!("@@@ VERBATIM");
     let code_lines = fth.input_mgr.lines_until("END-VERBATIM")?;
     fth.emit_lines(code_lines);
 
@@ -268,8 +271,9 @@ fn w_verbatim(fth: &mut Fth) -> anyhow::Result<()> {
 }
 
 fn w_headless(fth: &mut Fth) -> anyhow::Result<()> {
-    println!("@@@ HEADLESSCODE");
-    let code_lines = fth.input_mgr.lines_until("END-CODE");
+    let code_lines = fth.input_mgr.lines_until("END-CODE")?;
+    fth.emit_lines(code_lines);
+
     Ok(())
 }
 
@@ -406,7 +410,6 @@ fn word_to_symbol(word_string: &str) -> String {
 pub trait FthGen {
     fn do_literal(&mut self, n: i64);
     fn do_string_literal(&mut self, s: &str);
-    fn do_number(&mut self, n: i64);
     fn create_word(&mut self, w: &str, is_immediate: bool);
     fn create_code(&mut self, w: &str, is_immediate: bool);
     fn close_definition(&mut self);
@@ -432,48 +435,66 @@ impl AttGen {
 
 impl FthGen for AttGen {
     fn do_literal(&mut self, n: i64) {
-        // println!("@@@======== FIXME: do_literal '{n}'");
+        println!("    .int lit");
+        let l = n as i32;
+        println!("    .int {l}");
     }
 
     fn do_string_literal(&mut self, s: &str) {
-        // println!("@@@======== FIXME: do_literal '{n}'");
-    }
-
-    fn do_number(&mut self, n: i64) {
+        println!("    .ascii \"{s}\"");
     }
 
     fn create_word(&mut self, w: &str, is_immediate: bool) {
-        println!("@@@======== FIXME: create_word '{w}'");
+        let word_sym = word_to_symbol(&w);
+        let word_len = w.len();
+        let flags:u8 = if is_immediate { 1 } else { 0 };
+        println!("    HIGH_W {word_sym} {word_len} \"{w}\" flgs={flags}");
     }
 
     fn create_code(&mut self, w: &str, is_immediate: bool) {
-        println!("@@@======== FIXME: create_code '{w}'");
+        let word_sym = word_to_symbol(&w);
+        let word_len = w.len();
+        let flags:u8 = if is_immediate { 1 } else { 0 };
+        println!("    CODE_W {word_sym} {word_len} \"{w}\" flgs={flags}");
     }
 
     fn close_definition(&mut self) {
     }
 
     fn emit_word(&mut self, w: &str) {
-        // println!("@@@======== FIXME: emit_word '{w}'");
+        let word_sym = word_to_symbol(&w);
+        println!("    .int {word_sym}");
     }
 
     fn emit_lines(&mut self, lines: Vec<String>) {
+        for l in lines {
+            print!("{l}");
+        }
     }
 
     fn compute_label(&mut self, w: &str) {
-        // println!("@@@======== FIXME: compute_label '{w}'");
+        println!("    .int {w}");
     }
 
     fn emit_label(&mut self, l: &str) {
-        // println!("@@@======== FIXME: emit_label '{l}'");
+        println!("{l}:");
     }
 
     fn create_constant(&mut self, name: &str, val: i64) {
-        println!("@@@======== FIXME: create_constant '{name}' = {val}");
+        let name_sym = word_to_symbol(&name);
+        let name_len = name.len();
+        let const_val = val as i32;
+        println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=do_const");
+        println!("    .int {const_val}");
     }
 
     fn create_variable(&mut self, name: &str, size: u8) {
-        println!("@@@======== FIXME: create_variable '{name}' x {size}");
+        let name_sym = word_to_symbol(&name);
+        let name_len = name.len();
+        println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=do_var");
+        for _ in 0..size {
+            println!("    .int 0");
+        }
     }
 }
 
@@ -491,7 +512,8 @@ impl Fth {
     pub fn new(arch: Arch) -> Fth {
         let g = match arch {
             Arch::C => panic!("C not supported yet"),
-            Arch::AttAsm => Box::new(AttGen::new()),
+            Arch::AttAsm32 => Box::new(AttGen::new()),
+            Arch::Ca6502 => panic!("ca65 (6502) not yet supported"),
         };
         Fth {
             gen: g,
@@ -611,7 +633,7 @@ impl Fth {
 
 fn main() -> anyhow::Result<()> {
     let cli = Args::parse();
-    let mut fth = Fth::new(Arch::AttAsm);
+    let mut fth = Fth::new(cli.arch);
     fth.interpret(&cli.filename)?;
 
     Ok(())
