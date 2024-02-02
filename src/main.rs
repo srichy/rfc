@@ -498,6 +498,83 @@ impl FthGen for AttGen {
     }
 }
 
+struct Ca6502 {
+    is_compiling: bool,
+}
+
+impl Ca6502 {
+    fn new() -> Self {
+        Ca6502 {
+            is_compiling: false,
+        }
+    }
+}
+
+impl FthGen for Ca6502 {
+    fn do_literal(&mut self, n: i64) {
+        println!("    .word lit");
+        let l = n as i16;
+        println!("    .word {l}");
+    }
+
+    fn do_string_literal(&mut self, s: &str) {
+        println!("    .byte \"{s}\"");
+    }
+
+    fn create_word(&mut self, w: &str, is_immediate: bool) {
+        let word_sym = word_to_symbol(&w);
+        let word_len = w.len();
+        let flags:u8 = if is_immediate { 1 } else { 0 };
+        println!("    HIGH_W {word_sym} {word_len} \"{w}\" flgs={flags}");
+    }
+
+    fn create_code(&mut self, w: &str, is_immediate: bool) {
+        let word_sym = word_to_symbol(&w);
+        let word_len = w.len();
+        let flags:u8 = if is_immediate { 1 } else { 0 };
+        println!("    CODE_W {word_sym} {word_len} \"{w}\" flgs={flags}");
+    }
+
+    fn close_definition(&mut self) {
+    }
+
+    fn emit_word(&mut self, w: &str) {
+        let word_sym = word_to_symbol(&w);
+        println!("    .word {word_sym}");
+    }
+
+    fn emit_lines(&mut self, lines: Vec<String>) {
+        for l in lines {
+            print!("{l}");
+        }
+    }
+
+    fn compute_label(&mut self, w: &str) {
+        println!("    .word {w}");
+    }
+
+    fn emit_label(&mut self, l: &str) {
+        println!("{l}:");
+    }
+
+    fn create_constant(&mut self, name: &str, val: i64) {
+        let name_sym = word_to_symbol(&name);
+        let name_len = name.len();
+        let const_val = val as i32;
+        println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=do_const");
+        println!("    .word {const_val}");
+    }
+
+    fn create_variable(&mut self, name: &str, size: u8) {
+        let name_sym = word_to_symbol(&name);
+        let name_len = name.len();
+        println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=do_var");
+        for _ in 0..size {
+            println!("    .word 0");
+        }
+    }
+}
+
 struct Fth {
     gen: Box<dyn FthGen>,
     input_mgr: InputMgr,
@@ -510,10 +587,10 @@ struct Fth {
 
 impl Fth {
     pub fn new(arch: Arch) -> Fth {
-        let g = match arch {
+        let g: Box<dyn FthGen> = match arch {
             Arch::C => panic!("C not supported yet"),
             Arch::AttAsm32 => Box::new(AttGen::new()),
-            Arch::Ca6502 => panic!("ca65 (6502) not yet supported"),
+            Arch::Ca6502 => Box::new(Ca6502::new()),
         };
         Fth {
             gen: g,
