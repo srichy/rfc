@@ -525,14 +525,14 @@ impl FthGen for Ca6502 {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
         let flags:u8 = if is_immediate { 1 } else { 0 };
-        println!("    HIGH_W {word_sym} {word_len} \"{w}\" flgs={flags}");
+        println!("    .HIGH_W {word_sym}, {word_len}, \"{w}\", , {flags}");
     }
 
     fn create_code(&mut self, w: &str, is_immediate: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
         let flags:u8 = if is_immediate { 1 } else { 0 };
-        println!("    CODE_W {word_sym} {word_len} \"{w}\" flgs={flags}");
+        println!("    .CODE_W {word_sym}, {word_len}, \"{w}\", , {flags}");
     }
 
     fn close_definition(&mut self) {
@@ -561,14 +561,14 @@ impl FthGen for Ca6502 {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
         let const_val = val as i32;
-        println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=do_const");
+        println!("    .HIGH_W {name_sym}, {name_len}, \"{name}\", do_const, ");
         println!("    .word {const_val}");
     }
 
     fn create_variable(&mut self, name: &str, size: u8) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
-        println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=do_var");
+        println!("    .HIGH_W {name_sym}, {name_len}, \"{name}\", do_var, ");
         for _ in 0..size {
             println!("    .word 0");
         }
