@@ -115,6 +115,7 @@ fn w_colon(fth: &mut Fth) -> anyhow::Result<()> {
 fn w_semicolon(fth: &mut Fth) -> anyhow::Result<()> {
     fth.is_compiling = false;
     fth.emit_word("exit");
+    fth.close_definition();
 
     Ok(())
 }
@@ -129,6 +130,7 @@ fn w_code(fth: &mut Fth) -> anyhow::Result<()> {
     let mut code_lines = fth.input_mgr.lines_until("END-CODE")?;
     code_lines.push("    NEXT\n".to_string());
     fth.emit_lines(code_lines);
+    fth.close_definition();
 
     Ok(())
 }
@@ -182,7 +184,7 @@ fn w_while(fth: &mut Fth) -> anyhow::Result<()> {
     let lab_end = fth.new_label();
 
     fth.emit_word("qbranch");
-    fth.compute_label(&lab_end);
+    fth.refer_to_label(&lab_end);
 
     fth.ctrl_stack.push(lab_end);
     fth.ctrl_stack.push(lab_begin);
@@ -195,7 +197,7 @@ fn w_repeat(fth: &mut Fth) -> anyhow::Result<()> {
     let lab_end = fth.ctrl_stack.pop().expect("Missing WHILE label at REPEAT");
 
     fth.emit_word("branch");
-    fth.compute_label(&lab_begin);
+    fth.refer_to_label(&lab_begin);
     fth.emit_label(&lab_end);
 
     Ok(())
@@ -205,7 +207,7 @@ fn w_until(fth: &mut Fth) -> anyhow::Result<()> {
     let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at REPEAT");
 
     fth.emit_word("qbranch");
-    fth.compute_label(&lab_begin);
+    fth.refer_to_label(&lab_begin);
 
     Ok(())
 }
@@ -214,7 +216,7 @@ fn w_again(fth: &mut Fth) -> anyhow::Result<()> {
     let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at REPEAT");
 
     fth.emit_word("branch");
-    fth.compute_label(&lab_begin);
+    fth.refer_to_label(&lab_begin);
 
     Ok(())
 }
@@ -222,7 +224,7 @@ fn w_again(fth: &mut Fth) -> anyhow::Result<()> {
 fn w_if(fth: &mut Fth) -> anyhow::Result<()> {
     let label = fth.new_label();
     fth.emit_word("qbranch");
-    fth.compute_label(&label);
+    fth.refer_to_label(&label);
     fth.ctrl_stack.push(label);
 
     Ok(())
@@ -232,7 +234,7 @@ fn w_else(fth: &mut Fth) -> anyhow::Result<()> {
     let head_label = fth.ctrl_stack.pop().expect("Missing IF for ELSE");
     let else_label = fth.new_label();
     fth.emit_word("branch");
-    fth.compute_label(&else_label);
+    fth.refer_to_label(&else_label);
     fth.ctrl_stack.push(else_label);
     fth.emit_label(&head_label);
 
@@ -248,8 +250,8 @@ fn w_then(fth: &mut Fth) -> anyhow::Result<()> {
 
 fn w_do(fth: &mut Fth) -> anyhow::Result<()> {
     let label = fth.new_label();
-    fth.emit_word("_2_to_r");
-    fth.compute_label(&label);
+    fth.emit_word("2to_r");
+    fth.emit_label(&label);
     fth.ctrl_stack.push(label);
 
     Ok(())
@@ -258,7 +260,7 @@ fn w_do(fth: &mut Fth) -> anyhow::Result<()> {
 fn  w_loop(fth: &mut Fth) -> anyhow::Result<()> {
     let label = fth.ctrl_stack.pop().expect("Missing DO for LOOP");
     fth.emit_word("do_loop");
-    fth.compute_label(&label);
+    fth.refer_to_label(&label);
 
     Ok(())
 }
@@ -295,7 +297,7 @@ fn w_of(fth: &mut Fth) -> anyhow::Result<()> {
     fth.emit_word("over");
     fth.emit_word("equals");
     fth.emit_word("qbranch");
-    fth.compute_label(&lab_skip);
+    fth.refer_to_label(&lab_skip);
     fth.emit_word("drop");
 
     fth.ctrl_stack.push(lab_skip);
@@ -308,7 +310,7 @@ fn w_endof(fth: &mut Fth) -> anyhow::Result<()> {
     let lab_end = lab_end.clone();
 
     fth.emit_word("branch");
-    fth.compute_label(&lab_end);
+    fth.refer_to_label(&lab_end);
     fth.emit_label(&lab_skip);
 
     Ok(())
@@ -329,12 +331,12 @@ fn w_s_quote(fth: &mut Fth) -> anyhow::Result<()> {
     let branch_target = fth.new_label();
     let string_loc = fth.new_label();
     fth.emit_word("branch");
-    fth.compute_label(&branch_target);
+    fth.refer_to_label(&branch_target);
     fth.emit_label(&string_loc);
     fth.do_string_literal(&term_str);
     fth.emit_label(&branch_target);
     fth.emit_word("lit");
-    fth.compute_label(&string_loc);
+    fth.refer_to_label(&string_loc);
     fth.do_literal(term_str.len() as i64);
 
     Ok(())
@@ -348,14 +350,14 @@ fn w_abort_quote(fth: &mut Fth) -> anyhow::Result<()> {
     let abort_target = fth.new_label();
     let string_loc = fth.new_label();
     fth.emit_word("qbranch");
-    fth.compute_label(&cont_target);
+    fth.refer_to_label(&cont_target);
     fth.emit_word("branch");
-    fth.compute_label(&abort_target);
+    fth.refer_to_label(&abort_target);
     fth.emit_label(&string_loc);
     fth.do_string_literal(&term_str);
     fth.emit_label(&abort_target);
     fth.emit_word("lit");
-    fth.compute_label(&string_loc);
+    fth.refer_to_label(&string_loc);
     fth.do_literal(term_str.len() as i64);
     fth.emit_word("type");
     fth.emit_word("cr");
@@ -369,7 +371,6 @@ fn w_bracket_tick(fth: &mut Fth) -> anyhow::Result<()> {
     fth.input_mgr.skip_ws()?;
     let w = fth.input_mgr.word()?;
     let w = w.expect("EOF in '[']'");
-    let w = word_to_symbol(&w);
     fth.emit_word("lit");
     fth.emit_word(&w);
 
@@ -383,22 +384,19 @@ fn w_next_immediate(fth: &mut Fth) -> anyhow::Result<()> {
 }
 
 fn word_to_symbol(word_string: &str) -> String {
-    let mut result = String::new();
+    let mut result = String::from("w_");
     let mut needs_underscore = false;
 
     for c in word_string.chars() {
+        if needs_underscore {
+            result.push('_');
+            needs_underscore = false;
+        }
         match SYMLINKAGE.get(&c) {
             None => {
-                if needs_underscore || (c != '_' && !c.is_ascii_alphabetic()) {
-                    result.push('_');
-                    needs_underscore = false;
-                }
                 result.push(c);
             }
             Some(map_value) => {
-                if result.len() > 0 {
-                    result.push('_');
-                }
                 result.push_str(map_value);
                 needs_underscore = true;
             }
@@ -408,6 +406,7 @@ fn word_to_symbol(word_string: &str) -> String {
 }
 
 pub trait FthGen {
+    fn prolog(&mut self);
     fn do_literal(&mut self, n: i64);
     fn do_string_literal(&mut self, s: &str);
     fn create_word(&mut self, w: &str, is_immediate: bool);
@@ -415,10 +414,11 @@ pub trait FthGen {
     fn close_definition(&mut self);
     fn emit_word(&mut self, w: &str);
     fn emit_lines(&mut self, lines: Vec<String>);
-    fn compute_label(&mut self, w: &str);
+    fn refer_to_label(&mut self, w: &str);
     fn emit_label(&mut self, l: &str);
     fn create_constant(&mut self, name: &str, val: i64);
     fn create_variable(&mut self, name: &str, size: u8);
+    fn epilog(&mut self);
 }
 
 struct AttGen {
@@ -434,6 +434,9 @@ impl AttGen {
 }
 
 impl FthGen for AttGen {
+    fn prolog(&mut self) {
+    }
+
     fn do_literal(&mut self, n: i64) {
         println!("    .int lit");
         let l = n as i32;
@@ -472,7 +475,7 @@ impl FthGen for AttGen {
         }
     }
 
-    fn compute_label(&mut self, w: &str) {
+    fn refer_to_label(&mut self, w: &str) {
         println!("    .int {w}");
     }
 
@@ -496,51 +499,66 @@ impl FthGen for AttGen {
             println!("    .int 0");
         }
     }
+
+    fn epilog(&mut self) {
+    }
 }
 
 struct Ca6502 {
     is_compiling: bool,
+    last_dict_entry: String,
 }
 
 impl Ca6502 {
     fn new() -> Self {
         Ca6502 {
             is_compiling: false,
+            last_dict_entry: String::from("0"),
         }
     }
 }
 
 impl FthGen for Ca6502 {
+    fn prolog(&mut self) {
+    }
+
     fn do_literal(&mut self, n: i64) {
-        println!("    .word lit");
+        println!("    .word w_lit");
         let l = n as i16;
-        println!("    .word {l}");
+        if l < 0 {
+            println!("    .sint {l}");
+        } else {
+            println!("    .word {l}");
+        }
     }
 
     fn do_string_literal(&mut self, s: &str) {
-        println!("    .byte \"{s}\"");
+        println!("    .text \"{s}\"");
     }
 
     fn create_word(&mut self, w: &str, is_immediate: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
         let flags:u8 = if is_immediate { 1 } else { 0 };
-        println!("    .HIGH_W {word_sym}, {word_len}, \"{w}\", , {flags}");
+        println!("{word_sym}    .HIGH_W {word_len}, \"{w}\", , {flags}");
+        println!("  .block");
     }
 
     fn create_code(&mut self, w: &str, is_immediate: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
         let flags:u8 = if is_immediate { 1 } else { 0 };
-        println!("    .CODE_W {word_sym}, {word_len}, \"{w}\", , {flags}");
+        println!("{word_sym}    .CODE_W {word_len}, \"{w}\", , {flags}");
+        println!("  .block");
     }
 
     fn close_definition(&mut self) {
+        println!("  .endblock");
     }
 
     fn emit_word(&mut self, w: &str) {
         let word_sym = word_to_symbol(&w);
-        println!("    .word {word_sym}");
+        println!("    .addr {word_sym}.cfa");
     }
 
     fn emit_lines(&mut self, lines: Vec<String>) {
@@ -549,29 +567,36 @@ impl FthGen for Ca6502 {
         }
     }
 
-    fn compute_label(&mut self, w: &str) {
-        println!("    .word {w}");
+    fn refer_to_label(&mut self, w: &str) {
+        println!("    .addr {w}");
     }
 
     fn emit_label(&mut self, l: &str) {
-        println!("{l}:");
+        println!("{l}");
     }
 
     fn create_constant(&mut self, name: &str, val: i64) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
         let const_val = val as i32;
-        println!("    .HIGH_W {name_sym}, {name_len}, \"{name}\", do_const, ");
-        println!("    .word {const_val}");
+        println!("{name_sym}    .HIGH_W {name_len}, \"{name}\", w_const, ");
+        if const_val < 0 {
+            println!("    .sint {const_val}");
+        } else {
+            println!("    .word {const_val}");
+        }
     }
 
     fn create_variable(&mut self, name: &str, size: u8) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
-        println!("    .HIGH_W {name_sym}, {name_len}, \"{name}\", do_var, ");
+        println!("{name_sym}    .HIGH_W {name_len}, \"{name}\", w_var, ");
         for _ in 0..size {
             println!("    .word 0");
         }
+    }
+
+    fn epilog(&mut self) {
     }
 }
 
@@ -605,7 +630,7 @@ impl Fth {
 
     fn new_label(&mut self) -> String {
         let label_index = self.next_label;
-        let label_str = format!("L{label_index:08}");
+        let label_str = format!("_L{label_index:03}");
         self.next_label += 1;
         label_str
     }
@@ -642,8 +667,8 @@ impl Fth {
         self.gen.emit_word(w);
     }
 
-    fn compute_label(&mut self, w: &str) {
-        self.gen.compute_label(w);
+    fn refer_to_label(&mut self, w: &str) {
+        self.gen.refer_to_label(w);
     }
 
     fn emit_label(&mut self, l: &str) {
@@ -665,6 +690,7 @@ impl Fth {
     pub fn interpret(&mut self, in_file: &str) -> anyhow::Result<()> {
         self.input_mgr.open_file(in_file)?;
 
+        self.gen.prolog();
         loop {
             self.input_mgr.skip_ws()?;
             let w = self.input_mgr.word()?;
@@ -703,6 +729,7 @@ impl Fth {
                 }
             }
         }
+        self.gen.epilog();
 
         Ok(())
     }
