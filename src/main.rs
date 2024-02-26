@@ -94,7 +94,7 @@ lazy_static! {
         m.insert("[']", w_bracket_tick as FthAction);
         m.insert("VERBATIM", w_verbatim as FthAction);
         m.insert("HEADLESSCODE", w_headless as FthAction);
-        m.insert("NEXT-IMMEDIATE", w_next_immediate as FthAction);
+        m.insert("NEXT_IMMEDIATE", w_next_immediate as FthAction);
 
         m
     };
@@ -279,7 +279,7 @@ fn w_headless(fth: &mut Fth) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn w_immediate(fth: &mut Fth) -> anyhow::Result<()> {
+fn w_immediate(_fth: &mut Fth) -> anyhow::Result<()> {
     panic!("FIXME: make a decision about word caching or not, please.");
 
     //Ok(())
@@ -422,13 +422,13 @@ pub trait FthGen {
 }
 
 struct AttGen {
-    is_compiling: bool,
+    _is_compiling: bool,
 }
 
 impl AttGen {
     fn new() -> Self {
         AttGen {
-            is_compiling: false,
+            _is_compiling: false,
         }
     }
 }
@@ -505,14 +505,14 @@ impl FthGen for AttGen {
 }
 
 struct Ca6502 {
-    is_compiling: bool,
+    _is_compiling: bool,
     last_dict_entry: String,
 }
 
 impl Ca6502 {
     fn new() -> Self {
         Ca6502 {
-            is_compiling: false,
+            _is_compiling: false,
             last_dict_entry: String::from("0"),
         }
     }
@@ -523,7 +523,7 @@ impl FthGen for Ca6502 {
     }
 
     fn do_literal(&mut self, n: i64) {
-        println!("    .word w_lit");
+        println!("    .word w_lit.cfa");
         let l = n as i16;
         if l < 0 {
             println!("    .sint {l}");
@@ -540,16 +540,24 @@ impl FthGen for Ca6502 {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
         let flags:u8 = if is_immediate { 1 } else { 0 };
-        println!("{word_sym}    .HIGH_W {word_len}, \"{w}\", , {flags}");
+        let mut w = String::from(w);
+        w.make_ascii_uppercase();
+        let last_ref = &self.last_dict_entry;
+        println!("{word_sym}    .HIGH_W {word_len}, \"{w}\", , {flags}, {last_ref}");
         println!("  .block");
+        self.last_dict_entry = word_sym.clone();
     }
 
     fn create_code(&mut self, w: &str, is_immediate: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
         let flags:u8 = if is_immediate { 1 } else { 0 };
-        println!("{word_sym}    .CODE_W {word_len}, \"{w}\", , {flags}");
+        let mut w = String::from(w);
+        w.make_ascii_uppercase();
+        let last_ref = &self.last_dict_entry;
+        println!("{word_sym}    .CODE_W {word_len}, \"{w}\", , {flags}, {last_ref}");
         println!("  .block");
+        self.last_dict_entry = word_sym.clone();
     }
 
     fn close_definition(&mut self) {
@@ -579,24 +587,34 @@ impl FthGen for Ca6502 {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
         let const_val = val as i32;
-        println!("{name_sym}    .HIGH_W {name_len}, \"{name}\", w_const, ");
+        let mut name = String::from(name);
+        name.make_ascii_uppercase();
+        let last_ref = &self.last_dict_entry;
+        println!("{name_sym}    .HIGH_W {name_len}, \"{name}\", w_const, , {last_ref}");
         if const_val < 0 {
             println!("    .sint {const_val}");
         } else {
             println!("    .word {const_val}");
         }
+        self.last_dict_entry = name_sym.clone();
     }
 
     fn create_variable(&mut self, name: &str, size: u8) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
-        println!("{name_sym}    .HIGH_W {name_len}, \"{name}\", w_var, ");
+        let mut name = String::from(name);
+        name.make_ascii_uppercase();
+        let last_ref = &self.last_dict_entry;
+        println!("{name_sym}    .HIGH_W {name_len}, \"{name}\", w_var, , {last_ref}");
         for _ in 0..size {
             println!("    .word 0");
         }
+        self.last_dict_entry = name_sym.clone();
     }
 
     fn epilog(&mut self) {
+        let de = &self.last_dict_entry;
+        println!("dict_head .addr {de}");
     }
 }
 
