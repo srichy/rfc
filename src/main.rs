@@ -555,7 +555,7 @@ impl FthGen for Ca6502 {
         let mut w = String::from(w);
         w.make_ascii_uppercase();
         let last_ref = &self.last_dict_entry;
-        println!("{word_sym}    .CODE_W {word_len}, \"{w}\", , {flags}, {last_ref}");
+        println!("{word_sym}    .CODE_W {word_len}, \"{w}\", {flags}, {last_ref}");
         println!("  .block");
         self.last_dict_entry = word_sym.clone();
     }
