@@ -90,6 +90,7 @@ lazy_static! {
         m.insert("ENDOF", w_endof as FthAction);
         m.insert("ENDCASE", w_endcase as FthAction);
         m.insert("S\"", w_s_quote as FthAction);
+        m.insert(".\"", w_dot_quote as FthAction);
         m.insert("ABORT\"", w_abort_quote as FthAction);
         m.insert("[']", w_bracket_tick as FthAction);
         m.insert("VERBATIM", w_verbatim as FthAction);
@@ -342,10 +343,29 @@ fn w_s_quote(fth: &mut Fth) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn w_dot_quote(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.input_mgr.skip_ws()?;
+    let term_str = fth.input_mgr.str_by(|c: char| c == '"')?;
+    let term_str = term_str.expect("Unterminated string for '.\"'");
+    let branch_target = fth.new_label();
+    let string_loc = fth.new_label();
+    fth.emit_word("branch");
+    fth.refer_to_label(&branch_target);
+    fth.emit_label(&string_loc);
+    fth.do_string_literal(&term_str);
+    fth.emit_label(&branch_target);
+    fth.emit_word("lit");
+    fth.refer_to_label(&string_loc);
+    fth.do_literal(term_str.len() as i64);
+    fth.emit_word("type");
+
+    Ok(())
+}
+
 fn w_abort_quote(fth: &mut Fth) -> anyhow::Result<()> {
     fth.input_mgr.skip_ws()?;
     let term_str = fth.input_mgr.str_by(|c: char| c == '"')?;
-    let term_str = term_str.expect("Unterminated string for 's\"'");
+    let term_str = term_str.expect("Unterminated string for 'abort\"'");
     let cont_target = fth.new_label();
     let abort_target = fth.new_label();
     let string_loc = fth.new_label();
