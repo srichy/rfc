@@ -1,7 +1,7 @@
 use anyhow;
 #[macro_use]
 extern crate lazy_static;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use clap::{Parser, ValueEnum};
 
 mod input_mgr;
@@ -12,6 +12,9 @@ use input_mgr::InputMgr;
 struct Args {
     #[arg(short, long, value_enum)]
     arch: Arch,
+
+    #[arg(short, long)]
+    defines: Option<String>,
 
     #[arg(help="Forth source file")]
     filename: String,
@@ -74,6 +77,7 @@ lazy_static! {
         m.insert("CONSTANT", w_constant as FthAction);
         m.insert("VARIABLE", w_variable as FthAction);
         m.insert("2VARIABLE", w_2variable as FthAction);
+        m.insert("XALLOT", w_allot as FthAction);
         m.insert("BEGIN", w_begin as FthAction);
         m.insert("WHILE", w_while as FthAction);
         m.insert("REPEAT", w_repeat as FthAction);
@@ -83,6 +87,7 @@ lazy_static! {
         m.insert("THEN", w_then as FthAction);
         m.insert("DO", w_do as FthAction);
         m.insert("LOOP", w_loop as FthAction);
+        m.insert("+LOOP", w_plus_loop as FthAction);
         m.insert("ELSE", w_else as FthAction);
         m.insert("IMMEDIATE", w_immediate as FthAction);
         m.insert("CASE", w_case as FthAction);
@@ -96,6 +101,11 @@ lazy_static! {
         m.insert("VERBATIM", w_verbatim as FthAction);
         m.insert("HEADLESSCODE", w_headless as FthAction);
         m.insert("NEXT_IMMEDIATE", w_next_immediate as FthAction);
+        m.insert("[DEFINED]", w_is_defined as FthAction);
+        m.insert("[IF]", w_comp_if as FthAction);
+        m.insert("[ELSE]", w_comp_else as FthAction);
+        m.insert("[THEN]", w_comp_then as FthAction);
+        m.insert("INCLUDE", w_include as FthAction);
 
         m
     };
@@ -172,6 +182,15 @@ fn w_2variable(fth: &mut Fth) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn w_allot(fth: &mut Fth) -> anyhow::Result<()> {
+    match fth.data_stack.pop() {
+        None => panic!("Stack underflow for ALLOT"),
+        Some(v) => fth.allot_space(v.try_into().expect("Bad numerical format for u64")),
+    }
+
+    Ok(())
+}
+
 fn w_begin(fth: &mut Fth) -> anyhow::Result<()> {
     let lab_begin = fth.new_label();
     fth.emit_label(&lab_begin);
@@ -205,7 +224,7 @@ fn w_repeat(fth: &mut Fth) -> anyhow::Result<()> {
 }
 
 fn w_until(fth: &mut Fth) -> anyhow::Result<()> {
-    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at REPEAT");
+    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at UNTIL");
 
     fth.emit_word("qbranch");
     fth.refer_to_label(&lab_begin);
@@ -214,7 +233,7 @@ fn w_until(fth: &mut Fth) -> anyhow::Result<()> {
 }
 
 fn w_again(fth: &mut Fth) -> anyhow::Result<()> {
-    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at REPEAT");
+    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at AGAIN");
 
     fth.emit_word("branch");
     fth.refer_to_label(&lab_begin);
@@ -261,6 +280,14 @@ fn w_do(fth: &mut Fth) -> anyhow::Result<()> {
 fn  w_loop(fth: &mut Fth) -> anyhow::Result<()> {
     let label = fth.ctrl_stack.pop().expect("Missing DO for LOOP");
     fth.emit_word("do_loop");
+    fth.refer_to_label(&label);
+
+    Ok(())
+}
+
+fn  w_plus_loop(fth: &mut Fth) -> anyhow::Result<()> {
+    let label = fth.ctrl_stack.pop().expect("Missing DO for LOOP");
+    fth.emit_word("do_plus_loop");
     fth.refer_to_label(&label);
 
     Ok(())
@@ -403,6 +430,58 @@ fn w_next_immediate(fth: &mut Fth) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn w_is_defined(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.input_mgr.skip_ws()?;
+    let def_name = fth.input_mgr.word()?;
+    let def_name = def_name.expect("EOF after [defined]!");
+    if fth.defines.contains(&def_name) {
+        fth.data_stack.push(-1);
+    } else {
+        fth.data_stack.push(0);
+    }
+
+    Ok(())
+}
+
+/* [IF]
+
+FIXME
+
+*/
+fn w_comp_if(fth: &mut Fth) -> anyhow::Result<()> {
+
+    Ok(())
+}
+
+/* [ELSE]
+
+FIXME
+
+*/
+fn w_comp_else(fth: &mut Fth) -> anyhow::Result<()> {
+
+    Ok(())
+}
+
+/* [THEN]
+
+FIXME
+
+*/
+fn w_comp_then(fth: &mut Fth) -> anyhow::Result<()> {
+
+    Ok(())
+}
+
+fn w_include(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.input_mgr.skip_ws()?;
+    let file_name = fth.input_mgr.word()?;
+    let file_name = file_name.expect("EOF after include!");
+    fth.input_mgr.open_file(&file_name)?;
+
+    Ok(())
+}
+
 fn word_to_symbol(word_string: &str) -> String {
     let mut result = String::from("w_");
     let mut needs_underscore = false;
@@ -438,6 +517,7 @@ pub trait FthGen {
     fn emit_label(&mut self, l: &str);
     fn create_constant(&mut self, name: &str, val: i64);
     fn create_variable(&mut self, name: &str, size: u8);
+    fn allot_space(&mut self, size: u64);
     fn epilog(&mut self);
 }
 
@@ -518,6 +598,10 @@ impl FthGen for AttGen {
         for _ in 0..size {
             println!("    .int 0");
         }
+    }
+
+    fn allot_space(&mut self, size: u64) {
+        println!("    .space {size}");
     }
 
     fn epilog(&mut self) {
@@ -632,6 +716,10 @@ impl FthGen for Ca6502 {
         self.last_dict_entry = name_sym.clone();
     }
 
+    fn allot_space(&mut self, size: u64) {
+        println!("    .fill {size}");
+    }
+
     fn epilog(&mut self) {
         let de = &self.last_dict_entry;
         println!("dict_head .addr {de}");
@@ -640,6 +728,7 @@ impl FthGen for Ca6502 {
 
 struct Fth {
     gen: Box<dyn FthGen>,
+    defines: HashSet<String>,
     input_mgr: InputMgr,
     is_compiling: bool,
     data_stack: Vec<i64>,
@@ -649,14 +738,23 @@ struct Fth {
 }
 
 impl Fth {
-    pub fn new(arch: Arch) -> Fth {
+    pub fn new(arch: Arch, defines: Option<String>) -> Fth {
         let g: Box<dyn FthGen> = match arch {
             Arch::C => panic!("C not supported yet"),
             Arch::AttAsm32 => Box::new(AttGen::new()),
             Arch::Ca6502 => Box::new(Ca6502::new()),
         };
+        let def_strings = defines.unwrap_or(String::new());
+        let def_strings: Vec<String> =
+            def_strings.split_terminator(',').map(|sp| String::from(sp)).collect();
+        let mut defines_set: HashSet<String> = HashSet::new();
+        for s in def_strings {
+            defines_set.insert(s);
+        }
+
         Fth {
             gen: g,
+            defines: defines_set,
             input_mgr: InputMgr::new(),
             is_compiling: false,
             data_stack: Vec::new(),
@@ -721,6 +819,10 @@ impl Fth {
         self.gen.create_variable(name, size);
     }
 
+    fn allot_space(&mut self, size: u64) {
+        self.gen.allot_space(size);
+    }
+
     fn emit_lines(&mut self, lines: Vec<String>) {
         self.gen.emit_lines(lines);
     }
@@ -754,7 +856,7 @@ impl Fth {
                                             self.emit_word(&w);
                                         } else {
                                             // FIXME
-                                            // println!("*** FIXME: handle bad immediate: '{w}'");
+                                            println!("*** FIXME: handle bad immediate: '{w}'");
                                         }
                                     }
                                 }
@@ -775,7 +877,7 @@ impl Fth {
 
 fn main() -> anyhow::Result<()> {
     let cli = Args::parse();
-    let mut fth = Fth::new(cli.arch);
+    let mut fth = Fth::new(cli.arch, cli.defines);
     fth.interpret(&cli.filename)?;
 
     Ok(())
