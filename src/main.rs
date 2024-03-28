@@ -444,33 +444,30 @@ fn w_is_defined(fth: &mut Fth) -> anyhow::Result<()> {
 }
 
 /* [IF]
-
-FIXME
-
-*/
+ * This will set the "skip state".  Checks for [ELSE] and [THEN]
+ * are special.
+ */
 fn w_comp_if(fth: &mut Fth) -> anyhow::Result<()> {
+    let should_compile = match fth.data_stack.pop() {
+        None => panic!("Stack underflow for [IF]"),
+        Some(v) => v != 0
+    };
 
+    if should_compile {
+        fth.skip_stack.push(CondCompileState::CompileUntilElse);
+    } else {
+        fth.skip_stack.push(CondCompileState::SkipUntilElse);
+    }
     Ok(())
 }
 
-/* [ELSE]
+fn w_comp_else(_fth: &mut Fth) -> anyhow::Result<()> {
 
-FIXME
-
-*/
-fn w_comp_else(fth: &mut Fth) -> anyhow::Result<()> {
-
-    Ok(())
+    panic!("*** Internal error: [ELSE] action reached!");
 }
 
-/* [THEN]
-
-FIXME
-
-*/
-fn w_comp_then(fth: &mut Fth) -> anyhow::Result<()> {
-
-    Ok(())
+fn w_comp_then(_fth: &mut Fth) -> anyhow::Result<()> {
+    panic!("*** Internal error: [THEN] action reached!");
 }
 
 fn w_include(fth: &mut Fth) -> anyhow::Result<()> {
@@ -523,12 +520,14 @@ pub trait FthGen {
 
 struct AttGen {
     _is_compiling: bool,
+    last_dict_entry: String,
 }
 
 impl AttGen {
     fn new() -> Self {
         AttGen {
             _is_compiling: false,
+            last_dict_entry: String::from("0"),
         }
     }
 }
@@ -538,7 +537,7 @@ impl FthGen for AttGen {
     }
 
     fn do_literal(&mut self, n: i64) {
-        println!("    .int lit");
+        println!("    .int w_lit");
         let l = n as i32;
         println!("    .int {l}");
     }
@@ -552,6 +551,7 @@ impl FthGen for AttGen {
         let word_len = w.len();
         let flags:u8 = if is_immediate { 1 } else { 0 };
         println!("    HIGH_W {word_sym} {word_len} \"{w}\" flgs={flags}");
+        self.last_dict_entry = word_sym.clone();
     }
 
     fn create_code(&mut self, w: &str, is_immediate: bool) {
@@ -559,6 +559,7 @@ impl FthGen for AttGen {
         let word_len = w.len();
         let flags:u8 = if is_immediate { 1 } else { 0 };
         println!("    CODE_W {word_sym} {word_len} \"{w}\" flgs={flags}");
+        self.last_dict_entry = word_sym.clone();
     }
 
     fn close_definition(&mut self) {
@@ -587,17 +588,19 @@ impl FthGen for AttGen {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
         let const_val = val as i32;
-        println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=do_const");
+        println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=w_do_const");
         println!("    .int {const_val}");
+        self.last_dict_entry = name_sym.clone();
     }
 
     fn create_variable(&mut self, name: &str, size: u8) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
-        println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=do_var");
+        println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=w_do_var");
         for _ in 0..size {
             println!("    .int 0");
         }
+        self.last_dict_entry = name_sym.clone();
     }
 
     fn allot_space(&mut self, size: u64) {
@@ -605,6 +608,8 @@ impl FthGen for AttGen {
     }
 
     fn epilog(&mut self) {
+        let de = &self.last_dict_entry;
+        println!("dict_head: .int dict_{de}");
     }
 }
 
@@ -726,11 +731,19 @@ impl FthGen for Ca6502 {
     }
 }
 
+#[derive(PartialEq, Copy, Clone)]
+enum CondCompileState {
+    Skipping,
+    SkipUntilElse,
+    CompileUntilElse,
+}
+
 struct Fth {
     gen: Box<dyn FthGen>,
     defines: HashSet<String>,
     input_mgr: InputMgr,
     is_compiling: bool,
+    skip_stack: Vec<CondCompileState>,
     data_stack: Vec<i64>,
     ctrl_stack: Vec<String>,
     next_label: u32,
@@ -757,11 +770,61 @@ impl Fth {
             defines: defines_set,
             input_mgr: InputMgr::new(),
             is_compiling: false,
+            skip_stack: Vec::new(),
             data_stack: Vec::new(),
             ctrl_stack: Vec::new(),
             next_label: 1,
             next_is_immediate: false,
         }
+    }
+
+    fn do_skip(&mut self, w: &str) -> bool {
+        let w = w.to_uppercase();
+
+        if self.skip_stack.is_empty() {
+            if w == "[THEN]" || w == "[ELSE]" {
+                panic!("Encountered {w} without matching [IF]");
+            }
+            return false;
+        }
+
+        let cur_action = *self.skip_stack.last().unwrap();
+        let is_skipping = cur_action == CondCompileState::Skipping ||
+            cur_action == CondCompileState::SkipUntilElse;
+
+        if w == "[ELSE]" {
+            match cur_action {
+                CondCompileState::SkipUntilElse => {
+                    self.skip_stack.pop();
+                    self.skip_stack.push(CondCompileState::CompileUntilElse);
+                }
+                CondCompileState::CompileUntilElse => {
+                    self.skip_stack.pop();
+                    self.skip_stack.push(CondCompileState::SkipUntilElse);
+                }
+                CondCompileState::Skipping => {
+                    // Do nothing.  Keep skip nesting constant here, but
+                    // also keep on skipping
+                }
+            }
+            return true
+        }
+
+        if w == "[THEN]" {
+            self.skip_stack.pop();
+            return true
+        }
+
+        // Hitting [IF] (or [THEN]) while skipping is special because we have to
+        // track nesting.  And [IF] is handled if _not_ skipping via its action.
+        if is_skipping {
+            if w == "[IF]" {
+                self.skip_stack.push(CondCompileState::Skipping);
+                return true;
+            }
+        }
+
+        is_skipping
     }
 
     fn new_label(&mut self) -> String {
@@ -837,6 +900,12 @@ impl Fth {
             match w {
                 None => break,
                 Some(w) => {
+
+                    if self.do_skip(&w) {
+                        // [IF], [ELSE], [THEN] are "special"
+                        continue;
+                    }
+
                     let upper_w = w.to_uppercase();
                     match ACTIVE_WORDS.get(&*upper_w) {
                         None => {
