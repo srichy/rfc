@@ -501,6 +501,28 @@ fn word_to_symbol(word_string: &str) -> String {
     result
 }
 
+enum EscapeMethod {
+    Backslash,
+    Double,
+}
+
+fn escape_quotes(method: EscapeMethod, w: &str) -> String {
+    let mut result = String::new();
+
+    for c in w.chars() {
+        if c == '"' {
+            match method {
+                EscapeMethod::Backslash => result.push('\\'),
+                EscapeMethod::Double => result.push('"'),
+            }
+            result.push(c);
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 pub trait FthGen {
     fn prolog(&mut self);
     fn do_literal(&mut self, n: i64);
@@ -549,6 +571,7 @@ impl FthGen for AttGen {
     fn create_word(&mut self, w: &str, is_immediate: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
+        let w = escape_quotes(EscapeMethod::Backslash, w);
         let flags:u8 = if is_immediate { 1 } else { 0 };
         println!("    HIGH_W {word_sym} {word_len} \"{w}\" flgs={flags}");
         self.last_dict_entry = word_sym.clone();
@@ -557,6 +580,7 @@ impl FthGen for AttGen {
     fn create_code(&mut self, w: &str, is_immediate: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
+        let w = escape_quotes(EscapeMethod::Backslash, w);
         let flags:u8 = if is_immediate { 1 } else { 0 };
         println!("    CODE_W {word_sym} {word_len} \"{w}\" flgs={flags}");
         self.last_dict_entry = word_sym.clone();
@@ -587,6 +611,7 @@ impl FthGen for AttGen {
     fn create_constant(&mut self, name: &str, val: i64) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
+        let name = escape_quotes(EscapeMethod::Backslash, name);
         let const_val = val as i32;
         println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=w_do_const");
         println!("    .int {const_val}");
@@ -596,6 +621,7 @@ impl FthGen for AttGen {
     fn create_variable(&mut self, name: &str, size: u8) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
+        let name = escape_quotes(EscapeMethod::Backslash, name);
         println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=w_do_var");
         for _ in 0..size {
             println!("    .int 0");
@@ -648,8 +674,8 @@ impl FthGen for Ca6502 {
     fn create_word(&mut self, w: &str, is_immediate: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
+        let mut w = escape_quotes(EscapeMethod::Double, w);
         let flags:u8 = if is_immediate { 1 } else { 0 };
-        let mut w = String::from(w);
         w.make_ascii_uppercase();
         let last_ref = &self.last_dict_entry;
         println!("{word_sym}    .HIGH_W {word_len}, \"{w}\", , {flags}, {last_ref}");
@@ -660,8 +686,8 @@ impl FthGen for Ca6502 {
     fn create_code(&mut self, w: &str, is_immediate: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
+        let mut w = escape_quotes(EscapeMethod::Double, w);
         let flags:u8 = if is_immediate { 1 } else { 0 };
-        let mut w = String::from(w);
         w.make_ascii_uppercase();
         let last_ref = &self.last_dict_entry;
         println!("{word_sym}    .CODE_W {word_len}, \"{w}\", {flags}, {last_ref}");
@@ -695,8 +721,8 @@ impl FthGen for Ca6502 {
     fn create_constant(&mut self, name: &str, val: i64) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
+        let mut name = escape_quotes(EscapeMethod::Double, name);
         let const_val = val as i32;
-        let mut name = String::from(name);
         name.make_ascii_uppercase();
         let last_ref = &self.last_dict_entry;
         println!("{name_sym}    .HIGH_W {name_len}, \"{name}\", w_const, , {last_ref}");
@@ -711,7 +737,7 @@ impl FthGen for Ca6502 {
     fn create_variable(&mut self, name: &str, size: u8) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
-        let mut name = String::from(name);
+        let mut name = escape_quotes(EscapeMethod::Double, name);
         name.make_ascii_uppercase();
         let last_ref = &self.last_dict_entry;
         println!("{name_sym}    .HIGH_W {name_len}, \"{name}\", w_var, , {last_ref}");
