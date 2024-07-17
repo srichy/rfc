@@ -86,6 +86,7 @@ lazy_static! {
         m.insert("IF", w_if as FthAction);
         m.insert("THEN", w_then as FthAction);
         m.insert("DO", w_do as FthAction);
+        m.insert("LEAVE", w_leave as FthAction);
         m.insert("LOOP", w_loop as FthAction);
         m.insert("+LOOP", w_plus_loop as FthAction);
         m.insert("ELSE", w_else as FthAction);
@@ -194,27 +195,27 @@ fn w_allot(fth: &mut Fth) -> anyhow::Result<()> {
 fn w_begin(fth: &mut Fth) -> anyhow::Result<()> {
     let lab_begin = fth.new_label();
     fth.emit_label(&lab_begin);
-    fth.ctrl_stack.push(lab_begin);
+    fth.ctrl_other_stack.push(lab_begin);
 
     Ok(())
 }
 
 fn w_while(fth: &mut Fth) -> anyhow::Result<()> {
-    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at WHILE");
+    let lab_begin = fth.ctrl_other_stack.pop().expect("Missing BEGIN label at WHILE");
     let lab_end = fth.new_label();
 
     fth.emit_word("qbranch");
     fth.refer_to_label(&lab_end);
 
-    fth.ctrl_stack.push(lab_end);
-    fth.ctrl_stack.push(lab_begin);
+    fth.ctrl_other_stack.push(lab_end);
+    fth.ctrl_other_stack.push(lab_begin);
 
     Ok(())
 }
 
 fn w_repeat(fth: &mut Fth) -> anyhow::Result<()> {
-    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at REPEAT");
-    let lab_end = fth.ctrl_stack.pop().expect("Missing WHILE label at REPEAT");
+    let lab_begin = fth.ctrl_other_stack.pop().expect("Missing BEGIN label at REPEAT");
+    let lab_end = fth.ctrl_other_stack.pop().expect("Missing WHILE label at REPEAT");
 
     fth.emit_word("branch");
     fth.refer_to_label(&lab_begin);
@@ -224,7 +225,7 @@ fn w_repeat(fth: &mut Fth) -> anyhow::Result<()> {
 }
 
 fn w_until(fth: &mut Fth) -> anyhow::Result<()> {
-    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at UNTIL");
+    let lab_begin = fth.ctrl_other_stack.pop().expect("Missing BEGIN label at UNTIL");
 
     fth.emit_word("qbranch");
     fth.refer_to_label(&lab_begin);
@@ -233,7 +234,7 @@ fn w_until(fth: &mut Fth) -> anyhow::Result<()> {
 }
 
 fn w_again(fth: &mut Fth) -> anyhow::Result<()> {
-    let lab_begin = fth.ctrl_stack.pop().expect("Missing BEGIN label at AGAIN");
+    let lab_begin = fth.ctrl_other_stack.pop().expect("Missing BEGIN label at AGAIN");
 
     fth.emit_word("branch");
     fth.refer_to_label(&lab_begin);
@@ -245,50 +246,66 @@ fn w_if(fth: &mut Fth) -> anyhow::Result<()> {
     let label = fth.new_label();
     fth.emit_word("qbranch");
     fth.refer_to_label(&label);
-    fth.ctrl_stack.push(label);
+    fth.ctrl_other_stack.push(label);
 
     Ok(())
 }
 
 fn w_else(fth: &mut Fth) -> anyhow::Result<()> {
-    let head_label = fth.ctrl_stack.pop().expect("Missing IF for ELSE");
+    let head_label = fth.ctrl_other_stack.pop().expect("Missing IF for ELSE");
     let else_label = fth.new_label();
     fth.emit_word("branch");
     fth.refer_to_label(&else_label);
-    fth.ctrl_stack.push(else_label);
+    fth.ctrl_other_stack.push(else_label);
     fth.emit_label(&head_label);
 
     Ok(())
 }
 
 fn w_then(fth: &mut Fth) -> anyhow::Result<()> {
-    let label = fth.ctrl_stack.pop().expect("Missing IF/ELSE for THEN");
+    let label = fth.ctrl_other_stack.pop().expect("Missing IF/ELSE for THEN");
     fth.emit_label(&label);
 
     Ok(())
 }
 
 fn w_do(fth: &mut Fth) -> anyhow::Result<()> {
-    let label = fth.new_label();
+    let backward = fth.new_label();
+    let forward = fth.new_label();
     fth.emit_word("2to_r");
-    fth.emit_label(&label);
-    fth.ctrl_stack.push(label);
+    fth.emit_label(&backward);
+    fth.ctrl_do_stack.push(backward);
+    fth.ctrl_do_stack.push(forward);
+
+    Ok(())
+}
+
+fn w_leave(fth: &mut Fth) -> anyhow::Result<()> {
+    let label = fth.ctrl_do_stack.last().expect("Missing DO for LOOP").clone();
+    fth.emit_word("branch");
+    fth.refer_to_label(&label);
 
     Ok(())
 }
 
 fn  w_loop(fth: &mut Fth) -> anyhow::Result<()> {
-    let label = fth.ctrl_stack.pop().expect("Missing DO for LOOP");
-    fth.emit_word("do_loop");
-    fth.refer_to_label(&label);
+    let forward = fth.ctrl_do_stack.pop().expect("Missing DO for LOOP");
+    let backward = fth.ctrl_do_stack.pop().expect("Missing DO for LOOP");
+    fth.emit_word("do_loop1");
+    fth.refer_to_label(&backward);
+    fth.emit_label(&forward);
+    fth.emit_word("unloop");
 
     Ok(())
 }
 
 fn  w_plus_loop(fth: &mut Fth) -> anyhow::Result<()> {
-    let label = fth.ctrl_stack.pop().expect("Missing DO for LOOP");
-    fth.emit_word("do_plus_loop");
-    fth.refer_to_label(&label);
+    let forward = fth.ctrl_do_stack.pop().expect("Missing DO for LOOP");
+    let backward = fth.ctrl_do_stack.pop().expect("Missing DO for LOOP");
+    fth.emit_word("do_plus_loop1");
+    fth.refer_to_label(&backward);
+    fth.emit_label(&forward);
+    fth.emit_word("unloop");
 
     Ok(())
 }
@@ -315,7 +332,7 @@ fn w_immediate(_fth: &mut Fth) -> anyhow::Result<()> {
 
 fn w_case(fth: &mut Fth) -> anyhow::Result<()> {
     let label = fth.new_label();
-    fth.ctrl_stack.push(label);
+    fth.ctrl_other_stack.push(label);
 
     Ok(())
 }
@@ -328,13 +345,13 @@ fn w_of(fth: &mut Fth) -> anyhow::Result<()> {
     fth.refer_to_label(&lab_skip);
     fth.emit_word("drop");
 
-    fth.ctrl_stack.push(lab_skip);
+    fth.ctrl_other_stack.push(lab_skip);
     Ok(())
 }
 
 fn w_endof(fth: &mut Fth) -> anyhow::Result<()> {
-    let lab_skip = fth.ctrl_stack.pop().expect("Missing OF for ENDOF");
-    let lab_end = fth.ctrl_stack.last().expect("Missing CASE for ENDOF");
+    let lab_skip = fth.ctrl_other_stack.pop().expect("Missing OF for ENDOF");
+    let lab_end = fth.ctrl_other_stack.last().expect("Missing CASE for ENDOF");
     let lab_end = lab_end.clone();
 
     fth.emit_word("branch");
@@ -345,7 +362,7 @@ fn w_endof(fth: &mut Fth) -> anyhow::Result<()> {
 }
 
 fn w_endcase(fth: &mut Fth) -> anyhow::Result<()> {
-    let lab_end = fth.ctrl_stack.pop().expect("Missing ENDOF for ENDCASE");
+    let lab_end = fth.ctrl_other_stack.pop().expect("Missing ENDOF for ENDCASE");
     fth.emit_word("drop");
     fth.emit_label(&lab_end);
 
@@ -771,7 +788,8 @@ struct Fth {
     is_compiling: bool,
     skip_stack: Vec<CondCompileState>,
     data_stack: Vec<i64>,
-    ctrl_stack: Vec<String>,
+    ctrl_do_stack: Vec<String>,
+    ctrl_other_stack: Vec<String>,
     next_label: u32,
     next_is_immediate: bool,
 }
@@ -798,7 +816,8 @@ impl Fth {
             is_compiling: false,
             skip_stack: Vec::new(),
             data_stack: Vec::new(),
-            ctrl_stack: Vec::new(),
+            ctrl_do_stack: Vec::new(),
+            ctrl_other_stack: Vec::new(),
             next_label: 1,
             next_is_immediate: false,
         }
