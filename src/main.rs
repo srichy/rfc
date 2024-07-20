@@ -86,6 +86,7 @@ lazy_static! {
         m.insert("IF", w_if as FthAction);
         m.insert("THEN", w_then as FthAction);
         m.insert("DO", w_do as FthAction);
+        m.insert("?DO", w_question_do as FthAction);
         m.insert("LEAVE", w_leave as FthAction);
         m.insert("LOOP", w_loop as FthAction);
         m.insert("+LOOP", w_plus_loop as FthAction);
@@ -273,6 +274,21 @@ fn w_do(fth: &mut Fth) -> anyhow::Result<()> {
     let backward = fth.new_label();
     let forward = fth.new_label();
     fth.emit_word("2to_r");
+    fth.emit_label(&backward);
+    fth.ctrl_do_stack.push(backward);
+    fth.ctrl_do_stack.push(forward);
+
+    Ok(())
+}
+
+fn w_question_do(fth: &mut Fth) -> anyhow::Result<()> {
+    let backward = fth.new_label();
+    let forward = fth.new_label();
+    fth.emit_word("2dup");
+    fth.emit_word("2to_r");
+    fth.emit_word("<>");
+    fth.emit_word("qbranch");
+    fth.refer_to_label(&forward);
     fth.emit_label(&backward);
     fth.ctrl_do_stack.push(backward);
     fth.ctrl_do_stack.push(forward);
