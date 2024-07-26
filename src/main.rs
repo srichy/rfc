@@ -103,6 +103,7 @@ lazy_static! {
         m.insert("VERBATIM", w_verbatim as FthAction);
         m.insert("HEADLESSCODE", w_headless as FthAction);
         m.insert("NEXT_IMMEDIATE", w_next_immediate as FthAction);
+        m.insert("NEXT_UNLISTED", w_next_unlisted as FthAction);
         m.insert("[DEFINED]", w_is_defined as FthAction);
         m.insert("[IF]", w_comp_if as FthAction);
         m.insert("[ELSE]", w_comp_else as FthAction);
@@ -120,7 +121,9 @@ fn w_colon(fth: &mut Fth) -> anyhow::Result<()> {
     let w_to_be_defined = w_to_be_defined.expect("EOF after colon!");
     let next_is_immediate = fth.next_is_immediate;
     fth.next_is_immediate = false;
-    fth.create_word(&w_to_be_defined, next_is_immediate);
+    let next_is_unlisted = fth.next_is_unlisted;
+    fth.next_is_unlisted = false;
+    fth.create_word(&w_to_be_defined, next_is_immediate, next_is_unlisted);
 
     Ok(())
 }
@@ -139,7 +142,9 @@ fn w_code(fth: &mut Fth) -> anyhow::Result<()> {
     let w_to_be_defined = w_to_be_defined.expect("EOF while defining CODE");
     let next_is_immediate = fth.next_is_immediate;
     fth.next_is_immediate = false;
-    fth.create_code(&w_to_be_defined, next_is_immediate);
+    let next_is_unlisted = fth.next_is_unlisted;
+    fth.next_is_unlisted = false;
+    fth.create_code(&w_to_be_defined, next_is_immediate, next_is_unlisted);
     let mut code_lines = fth.input_mgr.lines_until("END-CODE")?;
     code_lines.push("    NEXT\n".to_string());
     fth.emit_lines(code_lines);
@@ -158,9 +163,11 @@ fn w_constant(fth: &mut Fth) -> anyhow::Result<()> {
     fth.input_mgr.skip_ws()?;
     let constant_name = fth.input_mgr.word()?;
     let constant_name = constant_name.expect("EOF while defining a CONSTANT");
+    let next_is_unlisted = fth.next_is_unlisted;
+    fth.next_is_unlisted = false;
     match fth.data_stack.pop() {
         None => panic!("Stack underflow for CONSTANT '{constant_name}"),
-        Some(v) => fth.create_constant(&constant_name, v),
+        Some(v) => fth.create_constant(&constant_name, v, next_is_unlisted),
     }
 
     Ok(())
@@ -170,7 +177,9 @@ fn w_variable(fth: &mut Fth) -> anyhow::Result<()> {
     fth.input_mgr.skip_ws()?;
     let variable_name = fth.input_mgr.word()?;
     let variable_name = variable_name.expect("EOF while defining a VARIABLE");
-    fth.create_variable(&variable_name, 1);
+    let next_is_unlisted = fth.next_is_unlisted;
+    fth.next_is_unlisted = false;
+    fth.create_variable(&variable_name, 1, next_is_unlisted);
 
     Ok(())
 }
@@ -179,7 +188,9 @@ fn w_2variable(fth: &mut Fth) -> anyhow::Result<()> {
     fth.input_mgr.skip_ws()?;
     let variable_name = fth.input_mgr.word()?;
     let variable_name = variable_name.expect("EOF while defining a 2VARIABLE");
-    fth.create_variable(&variable_name, 2);
+    let next_is_unlisted = fth.next_is_unlisted;
+    fth.next_is_unlisted = false;
+    fth.create_variable(&variable_name, 2, next_is_unlisted);
 
     Ok(())
 }
@@ -463,6 +474,12 @@ fn w_next_immediate(fth: &mut Fth) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn w_next_unlisted(fth: &mut Fth) -> anyhow::Result<()> {
+    fth.next_is_unlisted = true;
+
+    Ok(())
+}
+
 fn w_is_defined(fth: &mut Fth) -> anyhow::Result<()> {
     fth.input_mgr.skip_ws()?;
     let def_name = fth.input_mgr.word()?;
@@ -560,15 +577,15 @@ pub trait FthGen {
     fn prolog(&mut self);
     fn do_literal(&mut self, n: i64);
     fn do_string_literal(&mut self, s: &str);
-    fn create_word(&mut self, w: &str, is_immediate: bool);
-    fn create_code(&mut self, w: &str, is_immediate: bool);
+    fn create_word(&mut self, w: &str, is_immediate: bool, unlisted: bool);
+    fn create_code(&mut self, w: &str, is_immediate: bool, unlisted: bool);
     fn close_definition(&mut self);
     fn emit_word(&mut self, w: &str);
     fn emit_lines(&mut self, lines: Vec<String>);
     fn refer_to_label(&mut self, w: &str);
     fn emit_label(&mut self, l: &str);
-    fn create_constant(&mut self, name: &str, val: i64);
-    fn create_variable(&mut self, name: &str, size: u8);
+    fn create_constant(&mut self, name: &str, val: i64, unlisted: bool);
+    fn create_variable(&mut self, name: &str, size: u8, unlisted: bool);
     fn allot_space(&mut self, size: u64);
     fn epilog(&mut self);
 }
@@ -601,22 +618,26 @@ impl FthGen for AttGen {
         println!("    .ascii \"{s}\"");
     }
 
-    fn create_word(&mut self, w: &str, is_immediate: bool) {
+    fn create_word(&mut self, w: &str, is_immediate: bool, unlisted: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
         let w = escape_quotes(EscapeMethod::Backslash, w);
         let flags:u8 = if is_immediate { 1 } else { 0 };
         println!("    HIGH_W {word_sym} {word_len} \"{w}\" flgs={flags}");
-        self.last_dict_entry = word_sym.clone();
+        if !unlisted {
+            self.last_dict_entry = word_sym.clone();
+        }
     }
 
-    fn create_code(&mut self, w: &str, is_immediate: bool) {
+    fn create_code(&mut self, w: &str, is_immediate: bool, unlisted: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
         let w = escape_quotes(EscapeMethod::Backslash, w);
         let flags:u8 = if is_immediate { 1 } else { 0 };
         println!("    CODE_W {word_sym} {word_len} \"{w}\" flgs={flags}");
-        self.last_dict_entry = word_sym.clone();
+        if !unlisted {
+            self.last_dict_entry = word_sym.clone();
+        }
     }
 
     fn close_definition(&mut self) {
@@ -641,17 +662,19 @@ impl FthGen for AttGen {
         println!("{l}:");
     }
 
-    fn create_constant(&mut self, name: &str, val: i64) {
+    fn create_constant(&mut self, name: &str, val: i64, unlisted: bool) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
         let name = escape_quotes(EscapeMethod::Backslash, name);
         let const_val = val as i32;
         println!("    HIGH_W {name_sym} {name_len} \"{name}\" act=w_do_const");
         println!("    .int {const_val}");
-        self.last_dict_entry = name_sym.clone();
+        if !unlisted {
+            self.last_dict_entry = name_sym.clone();
+        }
     }
 
-    fn create_variable(&mut self, name: &str, size: u8) {
+    fn create_variable(&mut self, name: &str, size: u8, unlisted: bool) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
         let name = escape_quotes(EscapeMethod::Backslash, name);
@@ -659,7 +682,9 @@ impl FthGen for AttGen {
         for _ in 0..size {
             println!("    .int 0");
         }
-        self.last_dict_entry = name_sym.clone();
+        if !unlisted {
+            self.last_dict_entry = name_sym.clone();
+        }
     }
 
     fn allot_space(&mut self, size: u64) {
@@ -704,7 +729,7 @@ impl FthGen for Ca6502 {
         println!("    .text \"{s}\"");
     }
 
-    fn create_word(&mut self, w: &str, is_immediate: bool) {
+    fn create_word(&mut self, w: &str, is_immediate: bool, unlisted: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
         let mut w = escape_quotes(EscapeMethod::Double, w);
@@ -713,10 +738,12 @@ impl FthGen for Ca6502 {
         let last_ref = &self.last_dict_entry;
         println!("{word_sym}    .HIGH_W {word_len}, \"{w}\", , {flags}, {last_ref}");
         println!("  .block");
-        self.last_dict_entry = word_sym.clone();
+        if !unlisted {
+            self.last_dict_entry = word_sym.clone();
+        }
     }
 
-    fn create_code(&mut self, w: &str, is_immediate: bool) {
+    fn create_code(&mut self, w: &str, is_immediate: bool, unlisted: bool) {
         let word_sym = word_to_symbol(&w);
         let word_len = w.len();
         let mut w = escape_quotes(EscapeMethod::Double, w);
@@ -725,7 +752,9 @@ impl FthGen for Ca6502 {
         let last_ref = &self.last_dict_entry;
         println!("{word_sym}    .CODE_W {word_len}, \"{w}\", {flags}, {last_ref}");
         println!("  .block");
-        self.last_dict_entry = word_sym.clone();
+        if !unlisted {
+            self.last_dict_entry = word_sym.clone();
+        }
     }
 
     fn close_definition(&mut self) {
@@ -751,7 +780,7 @@ impl FthGen for Ca6502 {
         println!("{l}");
     }
 
-    fn create_constant(&mut self, name: &str, val: i64) {
+    fn create_constant(&mut self, name: &str, val: i64, unlisted: bool) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
         let mut name = escape_quotes(EscapeMethod::Double, name);
@@ -764,10 +793,12 @@ impl FthGen for Ca6502 {
         } else {
             println!("    .word {const_val}");
         }
-        self.last_dict_entry = name_sym.clone();
+        if !unlisted {
+            self.last_dict_entry = name_sym.clone();
+        }
     }
 
-    fn create_variable(&mut self, name: &str, size: u8) {
+    fn create_variable(&mut self, name: &str, size: u8, unlisted: bool) {
         let name_sym = word_to_symbol(&name);
         let name_len = name.len();
         let mut name = escape_quotes(EscapeMethod::Double, name);
@@ -777,7 +808,9 @@ impl FthGen for Ca6502 {
         for _ in 0..size {
             println!("    .word 0");
         }
-        self.last_dict_entry = name_sym.clone();
+        if !unlisted {
+            self.last_dict_entry = name_sym.clone();
+        }
     }
 
     fn allot_space(&mut self, size: u64) {
@@ -808,6 +841,7 @@ struct Fth {
     ctrl_other_stack: Vec<String>,
     next_label: u32,
     next_is_immediate: bool,
+    next_is_unlisted: bool,
 }
 
 impl Fth {
@@ -836,6 +870,7 @@ impl Fth {
             ctrl_other_stack: Vec::new(),
             next_label: 1,
             next_is_immediate: false,
+            next_is_unlisted: false,
         }
     }
 
@@ -911,12 +946,12 @@ impl Fth {
         }
     }
 
-    fn create_word(&mut self, w: &str, is_immediate: bool) {
-        self.gen.create_word(w, is_immediate);
+    fn create_word(&mut self, w: &str, is_immediate: bool, unlisted: bool) {
+        self.gen.create_word(w, is_immediate, unlisted);
     }
 
-    fn create_code(&mut self, w: &str, is_immediate: bool) {
-        self.gen.create_code(w, is_immediate);
+    fn create_code(&mut self, w: &str, is_immediate: bool, unlisted: bool) {
+        self.gen.create_code(w, is_immediate, unlisted);
     }
 
     fn close_definition(&mut self) {
@@ -935,12 +970,12 @@ impl Fth {
         self.gen.emit_label(l);
     }
 
-    fn create_constant(&mut self, name: &str, val: i64) {
-        self.gen.create_constant(name, val);
+    fn create_constant(&mut self, name: &str, val: i64, unlisted: bool) {
+        self.gen.create_constant(name, val, unlisted);
     }
 
-    fn create_variable(&mut self, name: &str, size: u8) {
-        self.gen.create_variable(name, size);
+    fn create_variable(&mut self, name: &str, size: u8, unlisted: bool) {
+        self.gen.create_variable(name, size, unlisted);
     }
 
     fn allot_space(&mut self, size: u64) {
