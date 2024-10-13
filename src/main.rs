@@ -711,6 +711,17 @@ impl Ca6502 {
     }
 }
 
+fn ref_str(s: &str) -> String {
+    if s.len() == 1 {
+        let first_char = s.chars().next().unwrap();
+        if first_char == '0' {
+            return s.to_string();
+        }
+    }
+    let s2 = format!("{}.cfa", s);
+    s2
+}
+
 impl FthGen for Ca6502 {
     fn prolog(&mut self) {
     }
@@ -735,7 +746,7 @@ impl FthGen for Ca6502 {
         let mut w = escape_quotes(EscapeMethod::Double, w);
         let flags:u8 = if is_immediate { 1 } else { 0 };
         w.make_ascii_uppercase();
-        let last_ref = &self.last_dict_entry;
+        let last_ref = ref_str(&self.last_dict_entry);
         println!("{word_sym}    .HIGH_W {word_len}, \"{w}\", , {flags}, {last_ref}");
         println!("  .block");
         if !unlisted {
@@ -749,7 +760,7 @@ impl FthGen for Ca6502 {
         let mut w = escape_quotes(EscapeMethod::Double, w);
         let flags:u8 = if is_immediate { 1 } else { 0 };
         w.make_ascii_uppercase();
-        let last_ref = &self.last_dict_entry;
+        let last_ref = ref_str(&self.last_dict_entry);
         println!("{word_sym}    .CODE_W {word_len}, \"{w}\", {flags}, {last_ref}");
         println!("  .block");
         if !unlisted {
@@ -763,7 +774,8 @@ impl FthGen for Ca6502 {
 
     fn emit_word(&mut self, w: &str) {
         let word_sym = word_to_symbol(&w);
-        println!("    .addr {word_sym}.cfa");
+        let sym_ref = ref_str(&word_sym);
+        println!("    .addr {sym_ref}");
     }
 
     fn emit_lines(&mut self, lines: Vec<String>) {
@@ -786,7 +798,7 @@ impl FthGen for Ca6502 {
         let mut name = escape_quotes(EscapeMethod::Double, name);
         let const_val = val as i32;
         name.make_ascii_uppercase();
-        let last_ref = &self.last_dict_entry;
+        let last_ref = ref_str(&self.last_dict_entry);
         println!("{name_sym}    .HIGH_W {name_len}, \"{name}\", w_const, , {last_ref}");
         if const_val < 0 {
             println!("    .sint {const_val}");
@@ -803,7 +815,7 @@ impl FthGen for Ca6502 {
         let name_len = name.len();
         let mut name = escape_quotes(EscapeMethod::Double, name);
         name.make_ascii_uppercase();
-        let last_ref = &self.last_dict_entry;
+        let last_ref = ref_str(&self.last_dict_entry);
         println!("{name_sym}    .HIGH_W {name_len}, \"{name}\", w_var, , {last_ref}");
         for _ in 0..size {
             println!("    .word 0");
@@ -818,7 +830,7 @@ impl FthGen for Ca6502 {
     }
 
     fn epilog(&mut self) {
-        let de = &self.last_dict_entry;
+        let de = ref_str(&self.last_dict_entry);
         println!("dict_head .addr {de}");
     }
 }
